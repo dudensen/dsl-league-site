@@ -10,6 +10,7 @@ import TeamSheets from "./pages/TeamSheets"
 import PlayerDetail from "./pages/PlayerDetail"
 import TradeAnalyzerPage from "./pages/TradeAnalyzer"
 import QueryBox from "./pages/QueryBox"
+import Dashboard from "./pages/Dashboard"
 
 export default function App() {
   return (
@@ -22,7 +23,7 @@ export default function App() {
           {/* IMPORTANT: ONLY main content scrolls (down + right) */}
           <div className="flex-1 overflow-auto">
             <Routes>
-              <Route path="/" element={<Players />} />
+              <Route path="/" element={<Dashboard />} />
               <Route path="/players" element={<Players />} />
               <Route path="/playerdata" element={<PlayerData />} />
               <Route path="/teams" element={<Teams />} />
