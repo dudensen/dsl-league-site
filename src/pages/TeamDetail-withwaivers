@@ -1,0 +1,314 @@
+import { useLeague } from "../context/LeagueContext"
+import { useParams } from "react-router-dom"
+import { useState, useEffect } from "react"
+import { fetchTeamSheet } from "../utils/fetchTeamSheet"
+import { TEAM_SHEETS } from "../config/teamSheets"
+
+export default function TeamDetail() {
+  const { table, loading, error } = useLeague()
+  const { teamName } = useParams()
+
+  const [sortConfig, setSortConfig] = useState({
+    key: null,
+    direction: "asc"
+  })
+
+  const [gmName, setGmName] = useState("")
+  const [waiverByYear, setWaiverByYear] = useState({})
+
+  const { data = [] } = table
+  const decodedTeam = decodeURIComponent(teamName)
+
+  const currentYear = new Date().getFullYear()
+  const years = [
+    currentYear,
+    currentYear + 1,
+    currentYear + 2,
+    currentYear + 3
+  ]
+
+  const CAP = 200
+
+  const teamPlayers = data.filter(
+    row => row["Current Owner"] === decodedTeam
+  )
+
+  // 🔥 Load GM + Waiver values
+  useEffect(() => {
+  async function loadTeamSheet() {
+    const teamConfig = TEAM_SHEETS[decodedTeam]
+    if (!teamConfig) return
+
+    try {
+      const rows = await fetchTeamSheet(teamConfig.gid)
+    console.log(rows) 
+      let gmFound = null
+      let picksRowIndex = -1
+      let waiverRowIndex = -1
+
+      // 🔎 Find GM + Picks row + Waiver row
+      rows.forEach((row, rowIndex) => {
+        row.forEach(cell => {
+          if (typeof cell === "string" && cell.toLowerCase().includes("gm:")) {
+            gmFound = cell
+          }
+
+          if (typeof cell === "string" && cell.toLowerCase().includes("picks")) {
+            picksRowIndex = rowIndex
+          }
+
+          if (typeof cell === "string" && cell.toLowerCase().includes("waiver")) {
+            waiverRowIndex = rowIndex
+          }
+        })
+      })
+
+      // ✅ Extract GM
+      if (gmFound) {
+        const match = gmFound.match(/gm:\s*(.*)/i)
+        if (match) setGmName(match[1].trim())
+      }
+
+      // ✅ Extract Waiver Values Using SAME COLUMN INDEXES
+      // 🔥 Extract Waivers (simple positional logic)
+        const extracted = {}
+
+        const waiverRow = rows.find(row =>
+        row.some(
+            cell =>
+            typeof cell === "string" &&
+            cell.trim().toLowerCase() === "waiver"
+        )
+        )
+
+        if (waiverRow) {
+        const waiverIndex = waiverRow.findIndex(
+            cell =>
+            typeof cell === "string" &&
+            cell.trim().toLowerCase() === "waiver"
+        )
+
+        let yearOffset = 0
+
+        for (let i = waiverIndex + 1; i < waiverRow.length; i++) {
+            const raw = waiverRow[i]
+
+            if (raw && raw.trim() !== "") {
+            const cleaned = raw
+                .replace("$", "")
+                .replace("m", "")
+                .trim()
+
+            const value = parseFloat(cleaned)
+
+            if (!isNaN(value) && yearOffset < years.length) {
+                extracted[years[yearOffset]] = value
+                yearOffset++
+            }
+            }
+
+            if (yearOffset >= years.length) break
+        }
+        }
+
+        setWaiverByYear(extracted)
+
+    } catch (err) {
+      console.error("Failed to load team sheet", err)
+    }
+  }
+
+  loadTeamSheet()
+}, [decodedTeam])
+
+
+  if (loading) return <div className="p-6 text-white">Loading...</div>
+  if (error) return <div className="p-6 text-red-500">{error}</div>
+
+  // 🔥 Salary Summary (Roster now includes Waiver)
+    const salarySummary = {}
+
+    years.forEach(year => {
+    let roster = 0
+    let minors = 0
+
+    teamPlayers.forEach(player => {
+        const raw = player[String(year)] || ""
+        if (!raw) return
+
+        const cleaned = raw.replace("$", "").replace("m", "").trim()
+        const salary = parseFloat(cleaned)
+        if (isNaN(salary)) return
+
+        if (player["Rookie / Minor / Captain"] === "M") {
+        minors += salary
+        } else {
+        roster += salary
+        }
+    })
+
+    const waiver = waiverByYear[year] || 0
+
+    const rosterWithWaiver = roster + waiver
+
+    salarySummary[year] = {
+        roster: rosterWithWaiver,
+        minors,
+        waiver,
+        capSpace: CAP - rosterWithWaiver
+    }
+    })
+
+  const positionOrder = ["G", "F", "C"]
+
+  const grouped = {}
+  teamPlayers.forEach(player => {
+    const pos = player["Position"] || "Unknown"
+    if (!grouped[pos]) grouped[pos] = []
+    grouped[pos].push(player)
+  })
+
+  const handleSort = key => {
+    setSortConfig(prev => ({
+      key,
+      direction:
+        prev.key === key && prev.direction === "asc"
+          ? "desc"
+          : "asc"
+    }))
+  }
+
+  const sortData = players => {
+    if (!sortConfig.key) return players
+
+    return [...players].sort((a, b) => {
+      let valA = a[sortConfig.key] ?? ""
+      let valB = b[sortConfig.key] ?? ""
+
+      const clean = v => {
+        if (typeof v !== "string") return v
+        const cleaned = v.replace("$", "").replace("m", "").trim()
+        const num = parseFloat(cleaned)
+        return isNaN(num) ? v.toLowerCase() : num
+      }
+
+      valA = clean(valA)
+      valB = clean(valB)
+
+      if (valA < valB) return sortConfig.direction === "asc" ? -1 : 1
+      if (valA > valB) return sortConfig.direction === "asc" ? 1 : -1
+      return 0
+    })
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-900 p-4 text-white">
+
+      <h1 className="text-3xl font-bold text-orange-400 mb-1">
+        {decodedTeam}
+      </h1>
+
+      {gmName && (
+        <p className="text-sm text-slate-400 mb-6">
+          GM: <span className="text-orange-400">{gmName}</span>
+        </p>
+      )}
+
+      {/* Salary Summary */}
+      <div className="mb-10 bg-slate-800 p-4 rounded">
+        <h2 className="text-lg font-semibold text-orange-400 mb-4">
+          Salary Summary
+        </h2>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="bg-slate-700 text-orange-400">
+                <th className="p-2 text-left">Year</th>
+                <th className="p-2 text-right">Roster</th>
+                <th className="p-2 text-right">Minors</th>
+                <th className="p-2 text-right">Waiver</th>
+                <th className="p-2 text-right">Cap Space</th>
+              </tr>
+            </thead>
+            <tbody>
+              {years.map(year => (
+                <tr key={year} className="border-b border-slate-700">
+                  <td className="p-2 font-semibold">{year}</td>
+                  <td className="p-2 text-right">
+                    ${salarySummary[year].roster}m
+                  </td>
+                  <td className="p-2 text-right">
+                    ${salarySummary[year].minors}m
+                  </td>
+                  <td className="p-2 text-right text-yellow-400">
+                    ${salarySummary[year].waiver}m
+                  </td>
+                  <td
+                    className={`p-2 text-right ${
+                      salarySummary[year].capSpace < 0
+                        ? "text-red-400"
+                        : "text-green-400"
+                    }`}
+                  >
+                    ${salarySummary[year].capSpace}m
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 🔥 PLAYER TABLES RESTORED */}
+      {positionOrder
+        .filter(pos => grouped[pos])
+        .map(position => {
+          const players = sortData(grouped[position])
+
+          return (
+            <div key={position} className="mb-8">
+              <h2 className="text-xl font-semibold mb-3">{position}</h2>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-700 text-orange-400">
+                      <th onClick={() => handleSort("Player")} className="p-2 cursor-pointer">Player</th>
+                      <th onClick={() => handleSort("Rookie / Minor / Captain")} className="p-2 cursor-pointer">Type</th>
+                      {years.map(year => (
+                        <th key={year} onClick={() => handleSort(String(year))} className="p-2 text-right cursor-pointer">
+                          {year}
+                        </th>
+                      ))}
+                      <th onClick={() => handleSort("Fpts")} className="p-2 text-right cursor-pointer">FP</th>
+                      <th onClick={() => handleSort("Fpts/G")} className="p-2 text-right cursor-pointer">FP/G</th>
+                      <th onClick={() => handleSort("Fpts/$")} className="p-2 text-right cursor-pointer">FP/$</th>
+                      <th onClick={() => handleSort("Fpts/G/$")} className="p-2 text-right cursor-pointer">FP/G/$</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {players.map((player, index) => (
+                      <tr key={index} className="border-b border-slate-700 hover:bg-slate-800">
+                        <td className="p-2 font-semibold">{player["Player"]}</td>
+                        <td className="p-2 text-center">{player["Rookie / Minor / Captain"] || "-"}</td>
+                        {years.map(year => (
+                          <td key={year} className="p-2 text-right">
+                            {player[String(year)] || "-"}
+                          </td>
+                        ))}
+                        <td className="p-2 text-right">{player["Fpts"] || "-"}</td>
+                        <td className="p-2 text-right">{player["Fpts/G"] || "-"}</td>
+                        <td className="p-2 text-right">{player["Fpts/$"] || "-"}</td>
+                        <td className="p-2 text-right">{player["Fpts/G/$"] || "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )
+        })}
+    </div>
+  )
+}
