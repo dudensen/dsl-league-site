@@ -1,6 +1,7 @@
+// src/pages/TeamDetail.jsx
 import { useLeague } from "../context/LeagueContext"
 import { useParams } from "react-router-dom"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { fetchTeamSheet } from "../utils/fetchTeamSheet"
 import { TEAM_SHEETS } from "../config/teamSheets"
 import { fetchHistoryTable } from "../utils/fetchHistory"
@@ -22,6 +23,23 @@ function norm(x) {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim()
+}
+
+function slugifyTeam(x) {
+  // used ONLY for file names in /public/logos/
+  // "Samarina Dudenbros - A" -> "samarina-dudenbros-a"
+  return String(x ?? "")
+    .replace(/\r/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/[’'“”"]/g, "")
+    .replace(/[–—]/g, "-")
+    .replace(/\s*-\s*/g, "-") // avoid "---" when name contains " - "
+    .replace(/[\/∕]/g, "/")
+    .replace(/[().,!:;?_]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\s/g, "-")
 }
 
 function buildUniqueKeys(headers) {
@@ -97,7 +115,6 @@ function parseHistoryToSummaryMap(grid) {
   const awardsKey =
     findColKey(cols, "Champs / Finals") ||
     findColKey(cols, "Champs/Finals") ||
-    // sometimes the header might just be blank-ish; fallback to 4th base column:
     (baseCount >= 4 ? cols[baseCount - 1]?.key : null)
 
   // Position-based bands (robust vs header changes)
@@ -118,7 +135,6 @@ function parseHistoryToSummaryMap(grid) {
     const baseHasAnything = row.slice(0, baseCount).some(v => v)
     if (!rowHasAnything || !baseHasAnything) break
 
-    // build object
     const obj = {}
     for (const c of cols) obj[c.key] = row[c.idx] ?? ""
 
@@ -132,7 +148,7 @@ function parseHistoryToSummaryMap(grid) {
     const bestFptsAdj = recordsKeys[1] ? s(obj[recordsKeys[1]]) : ""
     const bestPlayoffs = recordsKeys[2] ? s(obj[recordsKeys[2]]) : ""
 
-    // Totals (optional) from previous 3 columns (keeping for future use)
+    // Totals (optional)
     const totalRecordRaw = totalKeys[0] ? obj[totalKeys[0]] : ""
     const totalFptsAdj = totalKeys[1] ? s(obj[totalKeys[1]]) : ""
     const totalPlayoffsApps = totalKeys[2] ? s(obj[totalKeys[2]]) : ""
@@ -163,7 +179,6 @@ function pickBestTeamMatch(map, decodedTeam) {
 
   const entries = Object.entries(map)
 
-  // try startsWith / includes fallbacks
   const starts = entries.find(([k]) => k.startsWith(key) || key.startsWith(k))
   if (starts) return starts[1]
 
@@ -198,6 +213,17 @@ export default function TeamDetail() {
   const CAP = 200
   const teamPlayers = data.filter(row => row["Current Owner"] === decodedTeam)
 
+  // logo naming rule: <slug>-logo.webp / <slug>-front.webp / <slug>-back.webp
+  const teamSlug = useMemo(() => slugifyTeam(decodedTeam), [decodedTeam])
+  const logoSrc = `/logos/${teamSlug}-logo.webp`
+  const jerseyFrontSrc = `/logos/${teamSlug}-front.webp`
+  const jerseyBackSrc = `/logos/${teamSlug}-back.webp`
+
+  const onImgError = fallback => e => {
+    e.currentTarget.onerror = null
+    e.currentTarget.src = fallback
+  }
+
   useEffect(() => {
     async function loadTeamSheet() {
       const teamConfig = TEAM_SHEETS[decodedTeam]
@@ -205,13 +231,6 @@ export default function TeamDetail() {
 
       try {
         const rows = await fetchTeamSheet(teamConfig.gid)
-
-        console.log("========== TEAM SHEET DEBUG ==========")
-        console.log("Team:", decodedTeam)
-        console.log("GID:", teamConfig.gid)
-        console.log("Years expected:", years)
-        console.log("Raw rows (first 120):", rows?.slice?.(0, 120))
-        console.log("======================================")
 
         // GM
         let gmFound = null
@@ -324,25 +343,13 @@ export default function TeamDetail() {
             map[col] = years[i]
           })
 
-          return { map, counts, topCols }
+          return { map }
         }
 
-        let inferred = null
         if (picksRowIndex !== -1 && Object.keys(yearColumnMap).length === 0) {
-          inferred = inferYearColumnsFromMarks()
+          const inferred = inferYearColumnsFromMarks()
           yearColumnMap = inferred.map
         }
-
-        console.log("========== PICKS PARSER DEBUG ==========")
-        console.log("picksRowIndex:", picksRowIndex)
-        console.log("picksColIndex:", picksColIndex)
-        console.log("pickNameCol:", pickNameCol)
-        console.log("yearColumnMap (col -> year):", yearColumnMap)
-        if (inferred) {
-          console.log("inferred counts (col -> count):", inferred.counts)
-          console.log("inferred topCols:", inferred.topCols)
-        }
-        console.log("=======================================")
 
         const grouped = {}
         years.forEach(y => {
@@ -369,9 +376,7 @@ export default function TeamDetail() {
             Object.entries(yearColumnMap).forEach(([colIndexStr, year]) => {
               const colIndex = Number(colIndexStr)
               if (isMarked(row[colIndex])) {
-                if (round === "A" || round === "B") {
-                  grouped[year][round].add(team)
-                }
+                if (round === "A" || round === "B") grouped[year][round].add(team)
               }
             })
           }
@@ -385,13 +390,9 @@ export default function TeamDetail() {
           }
         })
 
-        console.log("========== PICKS RESULT DEBUG ==========")
-        console.log("finalPicks:", finalPicks)
-        console.log("=======================================")
-
         setPicksByYear(finalPicks)
       } catch (err) {
-        console.error("Failed to load team sheet", err)
+        // keep silent (no console output)
       }
     }
 
@@ -407,18 +408,10 @@ export default function TeamDetail() {
         const grid = res?.grid
         const map = parseHistoryToSummaryMap(grid)
 
-        // optional debug:
-        console.log("========== HISTORY SUMMARY DEBUG ==========")
-        console.log("decodedTeam:", decodedTeam)
-        console.log("map keys sample:", Object.keys(map).slice(0, 10))
-        console.log("match:", pickBestTeamMatch(map, decodedTeam))
-        console.log("==========================================")
-
         const match = pickBestTeamMatch(map, decodedTeam)
         if (!alive) return
         setHistorySummary(match || null)
       } catch (e) {
-        console.warn("History summary load failed:", e)
         if (!alive) return
         setHistorySummary(null)
       }
@@ -466,8 +459,6 @@ export default function TeamDetail() {
     }
   })
 
-  const positionOrder = ["G", "F", "C"]
-
   const groupedPlayers = {}
   teamPlayers.forEach(player => {
     const pos = player["Position"] || "Unknown"
@@ -512,22 +503,60 @@ export default function TeamDetail() {
 
   return (
     <div className="min-h-screen bg-slate-900 p-4 text-white">
-      <h1 className="text-3xl font-bold text-orange-400 mb-1">{decodedTeam}</h1>
+      {/* ================= TOP 3 BOXES ================= */}
+      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+        {/* Box 1: Team Logo + Name + GM */}
+        <div className="rounded-xl border border-slate-700 bg-slate-900/40 p-4">
+          <div className="flex flex-col items-center text-center gap-3">
+            <div className="h-24 w-24 rounded-xl bg-slate-800/60 p-3 flex items-center justify-center">
+              <img
+                src={logoSrc}
+                alt={`${decodedTeam} logo`}
+                className="h-full w-full object-contain"
+                onError={onImgError("/logos/_default-logo.webp")}
+              />
+            </div>
 
-      {gmName && (
-        <p className="text-sm text-slate-400 mb-6">
-          GM: <span className="text-orange-400">{gmName}</span>
-        </p>
-      )}
+            <div>
+              <h1 className="text-2xl font-bold text-orange-400">{decodedTeam}</h1>
+              <p className="text-sm text-slate-400 mt-1">
+                GM: <span className="text-orange-400">{gmName || "—"}</span>
+              </p>
+            </div>
+          </div>
+        </div>
 
- {/* ✅ History summary card */}
-        <div className="mb-8 rounded-xl border border-slate-700 bg-slate-900/40 p-4">
+        {/* Box 2: Jerseys (HIDDEN on mobile) */}
+        <div className="hidden md:block rounded-xl border border-slate-700 bg-slate-900/40 p-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-lg bg-slate-800/60 p-3 flex flex-col items-center">
+              <img
+                src={jerseyFrontSrc}
+                alt={`${decodedTeam} jersey front`}
+                className="h-48 w-full object-contain"
+                onError={onImgError("/logos/_default-jersey.webp")}
+              />
+            </div>
+
+            <div className="rounded-lg bg-slate-800/60 p-3 flex flex-col items-center">
+              <img
+                src={jerseyBackSrc}
+                alt={`${decodedTeam} jersey back`}
+                className="h-48 w-full object-contain"
+                onError={onImgError("/logos/_default-jersey.webp")}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Box 3: History Records */}
+        <div className="rounded-xl border border-slate-700 bg-slate-900/40 p-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-orange-400">History Records</h2>
             <div className="text-xs text-slate-400">Best-ever</div>
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-2">
             <div className="rounded-lg bg-slate-800/60 p-3">
               <div className="text-[11px] uppercase tracking-wide text-slate-400">Best Record</div>
               <div className="mt-1 text-lg font-bold text-white">
@@ -559,6 +588,7 @@ export default function TeamDetail() {
             </div>
           </div>
         </div>
+      </div>
 
       {/* ================= SALARY SUMMARY ================= */}
       <div className="mb-10 bg-slate-800 p-4 rounded">
@@ -593,8 +623,6 @@ export default function TeamDetail() {
           </tbody>
         </table>
 
-       
-
         {/* ================= PICKS TABLE (PRETTY) ================= */}
         <h2 className="text-lg font-semibold text-orange-400 mb-4">Draft Picks</h2>
 
@@ -621,7 +649,7 @@ export default function TeamDetail() {
       </div>
 
       {/* ================= PLAYER TABLES ================= */}
-      {positionOrder
+      {["G", "F", "C"]
         .filter(pos => groupedPlayers[pos])
         .map(position => {
           const players = sortData(groupedPlayers[position])
@@ -655,10 +683,7 @@ export default function TeamDetail() {
                   </thead>
                   <tbody>
                     {players.map((player, index) => (
-                      <tr
-                        key={index}
-                        className="border-b border-slate-700 hover:bg-slate-800"
-                      >
+                      <tr key={index} className="border-b border-slate-700 hover:bg-slate-800">
                         <td className="p-2 font-semibold">{player["Player"]}</td>
                         <td className="p-2 text-center">
                           {player["Rookie / Minor / Captain"] || "-"}
