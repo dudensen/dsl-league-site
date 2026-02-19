@@ -7,7 +7,21 @@ export default function Sidebar() {
 
   return (
     <aside className="hidden md:flex w-60 shrink-0 h-screen overflow-y-auto bg-slate-800 p-6 flex-col">
-      <h2 className="text-2xl font-bold mb-8 text-orange-400">DSL League</h2>
+      {/* Logo (top, centered) */}
+      <img
+        src="/logos/_default-logo.png"
+        alt="DSL League"
+        className="h-40 rounded-xl object-contain mb-4 self-start"
+        loading="lazy"
+        onError={e => {
+          e.currentTarget.style.display = "none"
+        }}
+      />
+
+      {/* Title (left, right above nav) */}
+      <h2 className="text-2xl font-bold mb-8 text-orange-400">
+        DSL League
+      </h2>
 
       <nav className="flex flex-col gap-4">
         <NavLink to="/" className={({ isActive }) => `${baseClass} ${isActive ? activeClass : inactiveClass}`}>Dashboard</NavLink>

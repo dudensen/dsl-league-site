@@ -1,6 +1,7 @@
+// src/pages/PlayerDetail.jsx
 import { useLeague } from "../context/LeagueContext"
 import { useParams, Link } from "react-router-dom"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   ResponsiveContainer,
   LineChart,
@@ -10,6 +11,7 @@ import {
   CartesianGrid,
   Tooltip
 } from "recharts"
+import { fetchTransactionsRows } from "../utils/fetchTransactions"
 
 export default function PlayerDetail() {
   const { table, loading, error } = useLeague()
@@ -34,6 +36,34 @@ export default function PlayerDetail() {
     Array(MAX_COMPARE).fill("")
   )
 
+  // ✅ Transactions (local fetch, no LeagueContext changes)
+  const [txRows, setTxRows] = useState([])
+  const [txLoading, setTxLoading] = useState(true)
+  const [txError, setTxError] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    async function loadTx() {
+      try {
+        setTxLoading(true)
+        setTxError(null)
+        const rows = await fetchTransactionsRows()
+        if (!alive) return
+        setTxRows(rows)
+      } catch (e) {
+        if (!alive) return
+        setTxError(e?.message || String(e))
+      } finally {
+        if (!alive) return
+        setTxLoading(false)
+      }
+    }
+    loadTx()
+    return () => {
+      alive = false
+    }
+  }, [])
+
   const LINE_COLORS = [
     "#f97316", // main (orange)
     "#22c55e", // green
@@ -48,6 +78,14 @@ export default function PlayerDetail() {
       .trim()
       .replace(/\s+/g, " ")
       .toLowerCase()
+
+  // stronger normalization for transaction matching
+  const normFuzzy = s =>
+    String(s ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .replace(/[’'".,()/\\\-_:;!?]+/g, "")
 
   const toNumberOrNull = v => {
     const s = String(v ?? "")
@@ -106,7 +144,6 @@ export default function PlayerDetail() {
   const nextSeasonYear = currentYear + 1
   const wageNextSeason = useMemo(() => {
     if (!mainRow) return null
-    // salary columns are plain years: "2020", "2021", ...
     return toSalaryOrNull(mainRow[String(nextSeasonYear)])
   }, [mainRow, nextSeasonYear])
 
@@ -122,13 +159,11 @@ export default function PlayerDetail() {
       const rankRaw = toNumberOrNull(row[rankKey])
       const games = toIntOrNull(row[gamesKey])
 
-      // ✅ DNP rule: 0 games
       const isDNP = games === 0
       const value = isDNP ? BOTTOM_RANK : rankRaw
 
       t.push({ year: y, value, isDNP, games })
     }
-
     return t
   }
 
@@ -369,9 +404,7 @@ export default function PlayerDetail() {
                 </div>
               )}
               {noMatch && !dup && (
-                <div className="text-xs text-red-400 mt-1">
-                  No exact match.
-                </div>
+                <div className="text-xs text-red-400 mt-1">No exact match.</div>
               )}
             </div>
           )
@@ -457,6 +490,61 @@ export default function PlayerDetail() {
     </>
   )
 
+  // ✅ grouped transactions: 1 card per transaction block (Date starts block)
+  const playerTransactions = useMemo(() => {
+    const target = normFuzzy(decodedPlayer)
+
+    const groups = new Map()
+    for (const r of txRows) {
+      if (r.txId == null || r.txId < 0) continue
+      if (!groups.has(r.txId)) groups.set(r.txId, [])
+      groups.get(r.txId).push(r)
+    }
+
+    const out = []
+
+    for (const [id, lines] of groups.entries()) {
+      // include if player appears on ANY line of the transaction
+      const involves = lines.some(l => {
+        const a = normFuzzy(l.assetA)
+        const b = normFuzzy(l.assetB)
+        return a === target || b === target
+      })
+      if (!involves) continue
+
+      lines.sort((a, b) => (a.rowIndex ?? 0) - (b.rowIndex ?? 0))
+      const head = lines[0]
+
+      const sent = []
+      const received = []
+      for (const l of lines) {
+        if (l.assetA) sent.push(`${l.assetA}${l.salaryA ? ` (${l.salaryA})` : ""}`)
+        if (l.assetB) received.push(`${l.assetB}${l.salaryB ? ` (${l.salaryB})` : ""}`)
+      }
+
+      out.push({
+        txId: id,
+        date: head.date,
+        type: head.type,
+        teamA: head.teamA,
+        teamB: head.teamB,
+        rookie: head.rookie,
+        sent,
+        received,
+        lines
+      })
+    }
+
+    const toSortable = d => {
+      const m = String(d || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+      if (!m) return 0
+      return Number(m[3]) * 10000 + Number(m[2]) * 100 + Number(m[1])
+    }
+    out.sort((a, b) => toSortable(b.date) - toSortable(a.date))
+
+    return out
+  }, [txRows, decodedPlayer])
+
   if (loading) return <div className="p-6 text-white">Loading...</div>
   if (error) return <div className="p-6 text-red-500">{error}</div>
 
@@ -503,21 +591,27 @@ export default function PlayerDetail() {
           <div className="bg-slate-900/60 border border-slate-700 rounded p-3">
             <div className="text-slate-400 text-xs mb-1">Best year (Rank)</div>
             <div className="font-semibold">
-              {careerArc.bestRank ? `${careerArc.bestRank.year} — #${careerArc.bestRank.rank}` : "-"}
+              {careerArc.bestRank
+                ? `${careerArc.bestRank.year} — #${careerArc.bestRank.rank}`
+                : "-"}
             </div>
           </div>
 
           <div className="bg-slate-900/60 border border-slate-700 rounded p-3">
             <div className="text-slate-400 text-xs mb-1">Best year (Fpts/G)</div>
             <div className="font-semibold text-sky-200">
-              {careerArc.bestFpts ? `${careerArc.bestFpts.year} — ${careerArc.bestFpts.fpts}` : "-"}
+              {careerArc.bestFpts
+                ? `${careerArc.bestFpts.year} — ${careerArc.bestFpts.fpts}`
+                : "-"}
             </div>
           </div>
 
           <div className="bg-slate-900/60 border border-slate-700 rounded p-3">
             <div className="text-slate-400 text-xs mb-1">Worst year (Rank)</div>
             <div className="font-semibold">
-              {careerArc.worstRank ? `${careerArc.worstRank.year} — #${careerArc.worstRank.rank}` : "-"}
+              {careerArc.worstRank
+                ? `${careerArc.worstRank.year} — #${careerArc.worstRank.rank}`
+                : "-"}
             </div>
           </div>
 
@@ -692,11 +786,107 @@ export default function PlayerDetail() {
             </LineChart>
           </ResponsiveContainer>
         </div>
-
-    
       </div>
 
-      {/* ✅ FIX: datalist needed for autocomplete suggestions */}
+      {/* ===== Transactions (1 card per transaction, expandable) ===== */}
+      <div className="mt-6 bg-slate-800 p-4 rounded">
+        <div className="flex items-baseline justify-between gap-4">
+          <h2 className="text-lg font-semibold text-orange-400">
+            Transactions involving {mainRow["Player"]}
+          </h2>
+          <div className="text-sm text-slate-300">
+            {txLoading ? "Loading..." : `${playerTransactions.length} found`}
+          </div>
+        </div>
+
+        {txError ? (
+          <div className="mt-3 text-red-300">{txError}</div>
+        ) : txLoading ? (
+          <div className="mt-3 text-slate-300">Loading transactions…</div>
+        ) : playerTransactions.length === 0 ? (
+          <div className="mt-3 text-slate-300">No transactions found.</div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {playerTransactions.map(tx => (
+              <details
+                key={tx.txId}
+                className="bg-slate-900/60 border border-slate-700 rounded-xl p-4"
+              >
+                <summary className="cursor-pointer list-none">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div className="font-semibold text-slate-100">
+                      {tx.date} •{" "}
+                      <span className="text-orange-300">{tx.type}</span>
+                    </div>
+                    <div className="text-sm text-slate-300">
+                      {tx.teamA || "-"}{" "}
+                      {tx.type?.toLowerCase() === "trade" ? "↔" : "→"}{" "}
+                      {tx.type?.toLowerCase() === "trade" ? tx.teamB || "-" : ""}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 text-sm text-slate-200">
+                    <span className="text-slate-400">Sent:</span>{" "}
+                    {tx.sent.length ? tx.sent.join(", ") : "-"}
+                  </div>
+
+                  {tx.type?.toLowerCase() === "trade" ? (
+                    <div className="mt-1 text-sm text-slate-200">
+                      <span className="text-slate-400">Received:</span>{" "}
+                      {tx.received.length ? tx.received.join(", ") : "-"}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-2 text-xs text-slate-400">
+                    Click to expand details
+                  </div>
+                </summary>
+
+                <div className="mt-4 overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-slate-300">
+                        <th className="text-left py-2 pr-4">Team A</th>
+                        <th className="text-left py-2 pr-4">Asset</th>
+                        <th className="text-left py-2 pr-4">Salary</th>
+                        <th className="text-left py-2 pr-4">Team B</th>
+                        <th className="text-left py-2 pr-4">Asset</th>
+                        <th className="text-left py-2 pr-4">Salary</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tx.lines.map((l, i) => (
+                        <tr key={i} className="border-t border-slate-700">
+                          <td className="py-2 pr-4 text-slate-200">
+                            {l.teamA || "-"}
+                          </td>
+                          <td className="py-2 pr-4 text-slate-200">
+                            {l.assetA || "-"}
+                          </td>
+                          <td className="py-2 pr-4 text-slate-200">
+                            {l.salaryA || "-"}
+                          </td>
+                          <td className="py-2 pr-4 text-slate-200">
+                            {l.teamB || "-"}
+                          </td>
+                          <td className="py-2 pr-4 text-slate-200">
+                            {l.assetB || "-"}
+                          </td>
+                          <td className="py-2 pr-4 text-slate-200">
+                            {l.salaryB || "-"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ✅ datalist needed for autocomplete suggestions */}
       <datalist id="players-list">
         {allPlayerNames.map(n => (
           <option key={n} value={n} />
