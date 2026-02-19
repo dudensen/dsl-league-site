@@ -16,6 +16,7 @@ export default function Sidebar() {
         <NavLink to="/playerdata" className={({ isActive }) => `${baseClass} ${isActive ? activeClass : inactiveClass}`}>PlayerData</NavLink>
         <NavLink to="/tradeanalyzer" className={({ isActive }) => `${baseClass} ${isActive ? activeClass : inactiveClass}`}>Trade Analyzer</NavLink>
         <NavLink to="/querybox" className={({ isActive }) => `${baseClass} ${isActive ? activeClass : inactiveClass}`}>Nolifer's Corner</NavLink>
+        <NavLink to="/history" className={({ isActive }) => `${baseClass} ${isActive ? activeClass : inactiveClass}`}>League History</NavLink>
       </nav>
     </aside>
   )
