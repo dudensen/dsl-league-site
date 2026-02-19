@@ -85,6 +85,7 @@ function findColKey(cols, headerName) {
   return hit?.key || null
 }
 
+/** 119 -> 11,9% */
 function formatTenthsPercent(raw) {
   const t = s(raw)
   if (!t) return ""
@@ -95,13 +96,19 @@ function formatTenthsPercent(raw) {
   return `${(n / 10).toFixed(1).replace(".", ",")}%`
 }
 
+/**
+ * History sheet summary:
+ * - Best Records triplet = LAST 3 columns (always)
+ * - Total triplet = 3 columns before that (optional)
+ * - Team + Awards are in the base columns.
+ */
 function parseHistoryToSummaryMap(grid) {
   const rows = Array.isArray(grid) ? grid : []
   if (rows.length < 2) return {}
 
   const headerRowRaw = rows[1] || []
   const colCount = headerRowRaw.length
-  if (colCount < 8) return {}
+  if (colCount < 8) return {} // too small
 
   const headerRow = new Array(colCount).fill("").map((_, i) => s(headerRowRaw[i]))
   const baseCount = getBaseCount(headerRow)
@@ -113,12 +120,14 @@ function parseHistoryToSummaryMap(grid) {
     header: headerRow[idx] || key
   }))
 
+  // Base columns
   const teamKey = findColKey(cols, "Team")
   const awardsKey =
     findColKey(cols, "Champs / Finals") ||
     findColKey(cols, "Champs/Finals") ||
     (baseCount >= 4 ? cols[baseCount - 1]?.key : null)
 
+  // Position-based bands
   const recordsIdxs = [colCount - 3, colCount - 2, colCount - 1].filter(i => i >= baseCount)
   const totalIdxs = [colCount - 6, colCount - 5, colCount - 4].filter(i => i >= baseCount)
 
@@ -143,10 +152,12 @@ function parseHistoryToSummaryMap(grid) {
 
     const awards = awardsKey ? s(obj[awardsKey]) : ""
 
+    // Records (last 3 columns)
     const bestRecordRaw = recordsKeys[0] ? obj[recordsKeys[0]] : ""
     const bestFptsAdj = recordsKeys[1] ? s(obj[recordsKeys[1]]) : ""
     const bestPlayoffs = recordsKeys[2] ? s(obj[recordsKeys[2]]) : ""
 
+    // Totals (optional)
     const totalRecordRaw = totalKeys[0] ? obj[totalKeys[0]] : ""
     const totalFptsAdj = totalKeys[1] ? s(obj[totalKeys[1]]) : ""
     const totalPlayoffsApps = totalKeys[2] ? s(obj[totalKeys[2]]) : ""
@@ -154,9 +165,11 @@ function parseHistoryToSummaryMap(grid) {
     byTeam[norm(team)] = {
       team,
       awards: awards || "",
+
       bestRecordW: formatTenthsPercent(bestRecordRaw),
       bestFptsAdjusted: bestFptsAdj,
       bestPlayoffs: bestPlayoffs,
+
       totalRecordW: formatTenthsPercent(totalRecordRaw),
       totalFptsAdjusted: totalFptsAdj,
       totalPlayoffsAppearances: totalPlayoffsApps
@@ -172,7 +185,6 @@ function pickBestTeamMatch(map, decodedTeam) {
   if (map[key]) return map[key]
 
   const entries = Object.entries(map)
-
   const starts = entries.find(([k]) => k.startsWith(key) || key.startsWith(k))
   if (starts) return starts[1]
 
@@ -184,10 +196,19 @@ function pickBestTeamMatch(map, decodedTeam) {
 
 /* ----------------------------- helpers (Transactions) ----------------------------- */
 
-function isTrade(type) {
-  return s(type).toLowerCase() === "trade"
+function canonTxType(t) {
+  // handles: "Buy-out", "Buy–out", "Buy out", NBSP, weird dashes, etc.
+  return s(t)
+    .toLowerCase()
+    .replace(/[\u00A0\s]/g, "") // spaces + NBSP
+    .replace(/[-_–—]/g, "") // dash variants
 }
 
+function isTrade(type) {
+  return canonTxType(type) === "trade"
+}
+
+// dd/mm/yyyy -> sortable yyyymmdd
 function dateSortable(d) {
   const m = String(d || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
   if (!m) return 0
@@ -227,6 +248,7 @@ export default function TeamDetail() {
   const CAP = 200
   const teamPlayers = data.filter(row => row["Current Owner"] === decodedTeam)
 
+  // logo naming rule: <slug>-logo.webp / <slug>-front.webp / <slug>-back.webp
   const teamSlug = useMemo(() => slugifyTeam(decodedTeam), [decodedTeam])
   const logoSrc = `/logos/${teamSlug}-logo.webp`
   const jerseyFrontSrc = `/logos/${teamSlug}-front.webp`
@@ -286,7 +308,7 @@ export default function TeamDetail() {
         }
         setWaiverByYear(extractedWaivers)
 
-        // PICKS (unchanged)
+        // PICKS
         const cleanCell = v => String(v ?? "").replace("\r", "").trim()
 
         const isMarked = v => {
@@ -412,6 +434,7 @@ export default function TeamDetail() {
     loadTeamSheet()
   }, [decodedTeam]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ✅ History summary fetch
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -433,7 +456,7 @@ export default function TeamDetail() {
     }
   }, [decodedTeam])
 
-  // ✅ Transactions fetch
+  // ✅ Transactions fetch (local)
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -479,6 +502,7 @@ export default function TeamDetail() {
       const involves = aKey === teamKey || (trade && bKey === teamKey)
       if (!involves) continue
 
+      // perspective: if viewing team is Team B in a trade, flip sent/received
       const viewingAsB = trade && bKey === teamKey
 
       const sent = []
@@ -513,17 +537,17 @@ export default function TeamDetail() {
     return out
   }, [txRows, teamKey])
 
-  // ✅ Filtered by button
+  // ✅ Filtered by button (canonical)
   const teamTransactions = useMemo(() => {
-    const f = String(txFilter || "").trim().toLowerCase()
-    return teamTransactionsAll.filter(t => s(t.type).toLowerCase() === f)
+    const f = canonTxType(txFilter)
+    return teamTransactionsAll.filter(t => canonTxType(t.type) === f)
   }, [teamTransactionsAll, txFilter])
 
-  // Counts per type for button badges
+  // ✅ Counts per type (canonical)
   const txCounts = useMemo(() => {
     const c = { trade: 0, waiver: 0, buyout: 0 }
     for (const t of teamTransactionsAll) {
-      const k = s(t.type).toLowerCase()
+      const k = canonTxType(t.type)
       if (k === "trade") c.trade++
       else if (k === "waiver") c.waiver++
       else if (k === "buyout") c.buyout++
@@ -619,7 +643,7 @@ export default function TeamDetail() {
     }`
 
   const countFor = t => {
-    const k = t.toLowerCase()
+    const k = canonTxType(t)
     if (k === "trade") return txCounts.trade
     if (k === "waiver") return txCounts.waiver
     if (k === "buyout") return txCounts.buyout
@@ -754,6 +778,7 @@ export default function TeamDetail() {
           </tbody>
         </table>
 
+        {/* ================= PICKS TABLE (PRETTY) ================= */}
         <h2 className="text-lg font-semibold text-orange-400 mb-4">Draft Picks</h2>
 
         <div className="overflow-x-auto">
@@ -842,19 +867,16 @@ export default function TeamDetail() {
             </div>
           </div>
 
-          {/* ✅ filter buttons */}
           <div className="flex flex-wrap gap-2">
             {TX_TYPES.map(t => (
               <button
                 key={t}
                 type="button"
-                className={filterBtnClass(txFilter === t)}
+                className={filterBtnClass(canonTxType(txFilter) === canonTxType(t))}
                 onClick={() => setTxFilter(t)}
               >
                 {t}
-                <span className="ml-2 text-xs text-slate-300">
-                  ({countFor(t)})
-                </span>
+                <span className="ml-2 text-xs text-slate-300">({countFor(t)})</span>
               </button>
             ))}
           </div>
