@@ -3,6 +3,177 @@ import { useParams } from "react-router-dom"
 import { useState, useEffect } from "react"
 import { fetchTeamSheet } from "../utils/fetchTeamSheet"
 import { TEAM_SHEETS } from "../config/teamSheets"
+import { fetchHistoryTable } from "../utils/fetchHistory"
+
+/* ----------------------------- helpers (History summary) ----------------------------- */
+
+function s(x) {
+  return String(x ?? "").replace(/\r/g, "").trim()
+}
+
+function norm(x) {
+  return String(x ?? "")
+    .replace(/\r/g, " ")
+    .replace(/\u00A0/g, " ")
+    .replace(/[％]/g, "%")
+    .replace(/[’'“”"]/g, "")
+    .replace(/[–—]/g, "-")
+    .replace(/[\/∕]/g, "/")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function buildUniqueKeys(headers) {
+  const seen = new Map()
+  return (headers || []).map(h => {
+    const key = s(h)
+    const n = (seen.get(key) ?? 0) + 1
+    seen.set(key, n)
+    return n === 1 ? key : `${key} (${n})`
+  })
+}
+
+function getBaseCount(headersRow) {
+  const headers = (headersRow || []).map(h => norm(h))
+  const seqA = ["division", "conference", "team", "champs / finals"]
+  const seqB = ["division", "conference", "team", "champs/finals"]
+
+  const matchSeq = seq => {
+    let idx = 0
+    for (let i = 0; i < headers.length; i++) {
+      if (headers[i] === seq[idx]) idx++
+      if (idx === seq.length) return i + 1
+    }
+    return null
+  }
+
+  return matchSeq(seqA) || matchSeq(seqB) || 4
+}
+
+function findColKey(cols, headerName) {
+  const target = norm(headerName)
+  const hit = (cols || []).find(c => norm(c.header) === target)
+  return hit?.key || null
+}
+
+/** 119 -> 11,9% */
+function formatTenthsPercent(raw) {
+  const t = s(raw)
+  if (!t) return ""
+  const cleaned = t.replace(/,/g, ".")
+  if (!/^\d+(\.\d+)?$/.test(cleaned)) return t
+  const n = Number(cleaned)
+  if (!Number.isFinite(n)) return t
+  return `${(n / 10).toFixed(1).replace(".", ",")}%`
+}
+
+/**
+ * History sheet summary:
+ * - Best Records triplet = LAST 3 columns (always)
+ * - Total triplet = 3 columns before that (optional)
+ * - Team + Awards are in the base columns.
+ */
+function parseHistoryToSummaryMap(grid) {
+  const rows = Array.isArray(grid) ? grid : []
+  if (rows.length < 2) return {}
+
+  const headerRowRaw = rows[1] || []
+  const colCount = headerRowRaw.length
+  if (colCount < 8) return {} // too small to contain base + totals/records safely
+
+  const headerRow = new Array(colCount).fill("").map((_, i) => s(headerRowRaw[i]))
+  const baseCount = getBaseCount(headerRow)
+
+  const uniqueHeaders = buildUniqueKeys(headerRow)
+  const cols = uniqueHeaders.map((key, idx) => ({
+    idx,
+    key,
+    header: headerRow[idx] || key
+  }))
+
+  // Base columns
+  const teamKey = findColKey(cols, "Team")
+  const awardsKey =
+    findColKey(cols, "Champs / Finals") ||
+    findColKey(cols, "Champs/Finals") ||
+    // sometimes the header might just be blank-ish; fallback to 4th base column:
+    (baseCount >= 4 ? cols[baseCount - 1]?.key : null)
+
+  // Position-based bands (robust vs header changes)
+  const recordsIdxs = [colCount - 3, colCount - 2, colCount - 1].filter(i => i >= baseCount)
+  const totalIdxs = [colCount - 6, colCount - 5, colCount - 4].filter(i => i >= baseCount)
+
+  // Keys for those indices
+  const recordsKeys = recordsIdxs.map(i => cols[i]?.key).filter(Boolean)
+  const totalKeys = totalIdxs.map(i => cols[i]?.key).filter(Boolean)
+
+  const byTeam = {}
+
+  for (let r = 2; r < rows.length; r++) {
+    const rowRaw = rows[r] || []
+    const row = new Array(colCount).fill("").map((_, i) => s(rowRaw[i]))
+
+    const rowHasAnything = row.some(v => v)
+    const baseHasAnything = row.slice(0, baseCount).some(v => v)
+    if (!rowHasAnything || !baseHasAnything) break
+
+    // build object
+    const obj = {}
+    for (const c of cols) obj[c.key] = row[c.idx] ?? ""
+
+    const team = teamKey ? s(obj[teamKey]) : ""
+    if (!team) continue
+
+    const awards = awardsKey ? s(obj[awardsKey]) : ""
+
+    // Records (Best*) from last 3 columns
+    const bestRecordRaw = recordsKeys[0] ? obj[recordsKeys[0]] : ""
+    const bestFptsAdj = recordsKeys[1] ? s(obj[recordsKeys[1]]) : ""
+    const bestPlayoffs = recordsKeys[2] ? s(obj[recordsKeys[2]]) : ""
+
+    // Totals (optional) from previous 3 columns (keeping for future use)
+    const totalRecordRaw = totalKeys[0] ? obj[totalKeys[0]] : ""
+    const totalFptsAdj = totalKeys[1] ? s(obj[totalKeys[1]]) : ""
+    const totalPlayoffsApps = totalKeys[2] ? s(obj[totalKeys[2]]) : ""
+
+    byTeam[norm(team)] = {
+      team,
+      awards: awards || "",
+
+      // Records:
+      bestRecordW: formatTenthsPercent(bestRecordRaw),
+      bestFptsAdjusted: bestFptsAdj,
+      bestPlayoffs: bestPlayoffs,
+
+      // Totals (not shown unless you want):
+      totalRecordW: formatTenthsPercent(totalRecordRaw),
+      totalFptsAdjusted: totalFptsAdj,
+      totalPlayoffsAppearances: totalPlayoffsApps
+    }
+  }
+
+  return byTeam
+}
+
+function pickBestTeamMatch(map, decodedTeam) {
+  if (!map) return null
+  const key = norm(decodedTeam)
+  if (map[key]) return map[key]
+
+  const entries = Object.entries(map)
+
+  // try startsWith / includes fallbacks
+  const starts = entries.find(([k]) => k.startsWith(key) || key.startsWith(k))
+  if (starts) return starts[1]
+
+  const contains = entries.find(([k]) => k.includes(key) || key.includes(k))
+  if (contains) return contains[1]
+
+  return null
+}
+
+/* ----------------------------- component ----------------------------- */
 
 export default function TeamDetail() {
   const { table, loading, error } = useLeague()
@@ -15,10 +186,8 @@ export default function TeamDetail() {
 
   const [gmName, setGmName] = useState("")
   const [waiverByYear, setWaiverByYear] = useState({})
-
-  // picksByYear shape:
-  // { 2026: { A: ["Team1", "Team2"], B: ["TeamX"] }, ... }
   const [picksByYear, setPicksByYear] = useState({})
+  const [historySummary, setHistorySummary] = useState(null)
 
   const { data = [] } = table
   const decodedTeam = decodeURIComponent(teamName)
@@ -27,7 +196,6 @@ export default function TeamDetail() {
   const years = [currentYear, currentYear + 1, currentYear + 2, currentYear + 3]
 
   const CAP = 200
-
   const teamPlayers = data.filter(row => row["Current Owner"] === decodedTeam)
 
   useEffect(() => {
@@ -38,9 +206,6 @@ export default function TeamDetail() {
       try {
         const rows = await fetchTeamSheet(teamConfig.gid)
 
-        // ======================================================
-        // ✅ DEBUG: dump raw rows
-        // ======================================================
         console.log("========== TEAM SHEET DEBUG ==========")
         console.log("Team:", decodedTeam)
         console.log("GID:", teamConfig.gid)
@@ -48,9 +213,7 @@ export default function TeamDetail() {
         console.log("Raw rows (first 120):", rows?.slice?.(0, 120))
         console.log("======================================")
 
-        // ============================
-        // 🔎 Extract GM
-        // ============================
+        // GM
         let gmFound = null
         rows.forEach(r => {
           r.forEach(cell => {
@@ -59,55 +222,39 @@ export default function TeamDetail() {
             }
           })
         })
-
         if (gmFound) {
           const match = gmFound.match(/gm:\s*(.*)/i)
           if (match) setGmName(match[1].trim())
         }
 
-        // ============================
-        // 🔥 WAIVERS
-        // ============================
+        // WAIVERS
         const extractedWaivers = {}
-
         const waiverRow = rows.find(r =>
-          r.some(
-            cell =>
-              typeof cell === "string" && cell.trim().toLowerCase() === "waiver"
-          )
+          r.some(cell => typeof cell === "string" && cell.trim().toLowerCase() === "waiver")
         )
 
         if (waiverRow) {
           const waiverIndex = waiverRow.findIndex(
-            cell =>
-              typeof cell === "string" && cell.trim().toLowerCase() === "waiver"
+            cell => typeof cell === "string" && cell.trim().toLowerCase() === "waiver"
           )
 
           let yearOffset = 0
-
           for (let i = waiverIndex + 1; i < waiverRow.length; i++) {
             const raw = waiverRow[i]
-
             if (raw && String(raw).trim() !== "") {
               const cleaned = String(raw).replace("$", "").replace("m", "").trim()
               const value = parseFloat(cleaned)
-
               if (!isNaN(value) && yearOffset < years.length) {
                 extractedWaivers[years[yearOffset]] = value
                 yearOffset++
               }
             }
-
             if (yearOffset >= years.length) break
           }
         }
-
         setWaiverByYear(extractedWaivers)
 
-        // ============================
-        // 🔥 PICKS (grouped by year + round)
-        // ============================
-
+        // PICKS
         const cleanCell = v => String(v ?? "").replace("\r", "").trim()
 
         const isMarked = v => {
@@ -121,7 +268,6 @@ export default function TeamDetail() {
           return m ? Number(m[1]) : null
         }
 
-        // 1) find "Picks" row
         const picksRowIndex = rows.findIndex(r =>
           r.some(cell => typeof cell === "string" && cell.trim().toLowerCase() === "picks")
         )
@@ -133,11 +279,9 @@ export default function TeamDetail() {
           )
         }
 
-        // In your sheet, pick names are in the SAME column as "Picks" (col 1)
         const pickNameCol = picksColIndex >= 0 ? picksColIndex : 1
 
-        // 2) try to find explicit year columns near picks section
-        let yearColumnMap = {} // colIndex -> year
+        let yearColumnMap = {}
 
         const candidateHeaderRows = [
           picksRowIndex - 2,
@@ -157,7 +301,6 @@ export default function TeamDetail() {
           if (Object.keys(yearColumnMap).length > 0) break
         }
 
-        // 3) if no explicit years, infer columns by "x" frequency
         const inferYearColumnsFromMarks = () => {
           const counts = {}
           const start = picksRowIndex + 1
@@ -201,7 +344,6 @@ export default function TeamDetail() {
         }
         console.log("=======================================")
 
-        // 4) build grouped result
         const grouped = {}
         years.forEach(y => {
           grouped[y] = { A: new Set(), B: new Set() }
@@ -255,6 +397,36 @@ export default function TeamDetail() {
 
     loadTeamSheet()
   }, [decodedTeam]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ✅ History summary fetch
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const res = await fetchHistoryTable()
+        const grid = res?.grid
+        const map = parseHistoryToSummaryMap(grid)
+
+        // optional debug:
+        console.log("========== HISTORY SUMMARY DEBUG ==========")
+        console.log("decodedTeam:", decodedTeam)
+        console.log("map keys sample:", Object.keys(map).slice(0, 10))
+        console.log("match:", pickBestTeamMatch(map, decodedTeam))
+        console.log("==========================================")
+
+        const match = pickBestTeamMatch(map, decodedTeam)
+        if (!alive) return
+        setHistorySummary(match || null)
+      } catch (e) {
+        console.warn("History summary load failed:", e)
+        if (!alive) return
+        setHistorySummary(null)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [decodedTeam])
 
   if (loading) return <div className="p-6 text-white">Loading...</div>
   if (error) return <div className="p-6 text-red-500">{error}</div>
@@ -335,11 +507,7 @@ export default function TeamDetail() {
 
   const renderPickLines = arr => {
     if (!arr || arr.length === 0) return "-"
-    return (
-      <div className="whitespace-pre-line leading-5">
-        {arr.join("\n")}
-      </div>
-    )
+    return <div className="whitespace-pre-line leading-5">{arr.join("\n")}</div>
   }
 
   return (
@@ -352,11 +520,49 @@ export default function TeamDetail() {
         </p>
       )}
 
+ {/* ✅ History summary card */}
+        <div className="mb-8 rounded-xl border border-slate-700 bg-slate-900/40 p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-orange-400">History Records</h2>
+            <div className="text-xs text-slate-400">Best-ever</div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="rounded-lg bg-slate-800/60 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">Best Record</div>
+              <div className="mt-1 text-lg font-bold text-white">
+                {historySummary?.bestRecordW || "—"}
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-slate-800/60 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                Best Fpts/G Adj
+              </div>
+              <div className="mt-1 text-lg font-bold text-white">
+                {historySummary?.bestFptsAdjusted || "—"}
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-slate-800/60 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">Best Playoffs</div>
+              <div className="mt-1 text-sm font-semibold text-white">
+                {historySummary?.bestPlayoffs || "—"}
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-slate-800/60 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">Awards</div>
+              <div className="mt-1 text-sm font-semibold text-white">
+                {historySummary?.awards || "—"}
+              </div>
+            </div>
+          </div>
+        </div>
+
       {/* ================= SALARY SUMMARY ================= */}
       <div className="mb-10 bg-slate-800 p-4 rounded">
-        <h2 className="text-lg font-semibold text-orange-400 mb-4">
-          Salary Summary
-        </h2>
+        <h2 className="text-lg font-semibold text-orange-400 mb-4">Salary Summary</h2>
 
         <table className="min-w-full text-sm mb-8">
           <thead>
@@ -374,14 +580,10 @@ export default function TeamDetail() {
                 <td className="p-2 font-semibold">{year}</td>
                 <td className="p-2 text-right">${salarySummary[year].roster}m</td>
                 <td className="p-2 text-right">${salarySummary[year].minors}m</td>
-                <td className="p-2 text-right text-yellow-400">
-                  ${salarySummary[year].waiver}m
-                </td>
+                <td className="p-2 text-right text-yellow-400">${salarySummary[year].waiver}m</td>
                 <td
                   className={`p-2 text-right ${
-                    salarySummary[year].capSpace < 0
-                      ? "text-red-400"
-                      : "text-green-400"
+                    salarySummary[year].capSpace < 0 ? "text-red-400" : "text-green-400"
                   }`}
                 >
                   ${salarySummary[year].capSpace}m
@@ -391,10 +593,10 @@ export default function TeamDetail() {
           </tbody>
         </table>
 
+       
+
         {/* ================= PICKS TABLE (PRETTY) ================= */}
-        <h2 className="text-lg font-semibold text-orange-400 mb-4">
-          Draft Picks
-        </h2>
+        <h2 className="text-lg font-semibold text-orange-400 mb-4">Draft Picks</h2>
 
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -409,12 +611,8 @@ export default function TeamDetail() {
               {years.map(year => (
                 <tr key={year} className="border-b border-slate-700 align-top">
                   <td className="p-2 font-semibold">{year}</td>
-                  <td className="p-2">
-                    {renderPickLines(picksByYear[year]?.A)}
-                  </td>
-                  <td className="p-2">
-                    {renderPickLines(picksByYear[year]?.B)}
-                  </td>
+                  <td className="p-2">{renderPickLines(picksByYear[year]?.A)}</td>
+                  <td className="p-2">{renderPickLines(picksByYear[year]?.B)}</td>
                 </tr>
               ))}
             </tbody>
@@ -435,10 +633,7 @@ export default function TeamDetail() {
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="bg-slate-700 text-orange-400">
-                      <th
-                        onClick={() => handleSort("Player")}
-                        className="p-2 cursor-pointer"
-                      >
+                      <th onClick={() => handleSort("Player")} className="p-2 cursor-pointer">
                         Player
                       </th>
                       <th
