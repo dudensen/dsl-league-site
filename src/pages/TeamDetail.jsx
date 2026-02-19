@@ -1,10 +1,11 @@
 // src/pages/TeamDetail.jsx
 import { useLeague } from "../context/LeagueContext"
-import { useParams } from "react-router-dom"
+import { useParams, Link } from "react-router-dom"
 import { useState, useEffect, useMemo } from "react"
 import { fetchTeamSheet } from "../utils/fetchTeamSheet"
 import { TEAM_SHEETS } from "../config/teamSheets"
 import { fetchHistoryTable } from "../utils/fetchHistory"
+import { fetchTransactionsRows } from "../utils/fetchTransactions"
 
 /* ----------------------------- helpers (History summary) ----------------------------- */
 
@@ -25,16 +26,25 @@ function norm(x) {
     .trim()
 }
 
+function normTeam(x) {
+  return s(x)
+    .replace(/\u00A0/g, " ")
+    .replace(/[’'“”"]/g, "")
+    .replace(/[–—]/g, "-")
+    .replace(/\s*-\s*/g, " - ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+}
+
 function slugifyTeam(x) {
-  // used ONLY for file names in /public/logos/
-  // "Samarina Dudenbros - A" -> "samarina-dudenbros-a"
   return String(x ?? "")
     .replace(/\r/g, " ")
     .trim()
     .toLowerCase()
     .replace(/[’'“”"]/g, "")
     .replace(/[–—]/g, "-")
-    .replace(/\s*-\s*/g, "-") // avoid "---" when name contains " - "
+    .replace(/\s*-\s*/g, "-")
     .replace(/[\/∕]/g, "/")
     .replace(/[().,!:;?_]/g, " ")
     .replace(/\s+/g, " ")
@@ -75,7 +85,6 @@ function findColKey(cols, headerName) {
   return hit?.key || null
 }
 
-/** 119 -> 11,9% */
 function formatTenthsPercent(raw) {
   const t = s(raw)
   if (!t) return ""
@@ -86,19 +95,13 @@ function formatTenthsPercent(raw) {
   return `${(n / 10).toFixed(1).replace(".", ",")}%`
 }
 
-/**
- * History sheet summary:
- * - Best Records triplet = LAST 3 columns (always)
- * - Total triplet = 3 columns before that (optional)
- * - Team + Awards are in the base columns.
- */
 function parseHistoryToSummaryMap(grid) {
   const rows = Array.isArray(grid) ? grid : []
   if (rows.length < 2) return {}
 
   const headerRowRaw = rows[1] || []
   const colCount = headerRowRaw.length
-  if (colCount < 8) return {} // too small to contain base + totals/records safely
+  if (colCount < 8) return {}
 
   const headerRow = new Array(colCount).fill("").map((_, i) => s(headerRowRaw[i]))
   const baseCount = getBaseCount(headerRow)
@@ -110,18 +113,15 @@ function parseHistoryToSummaryMap(grid) {
     header: headerRow[idx] || key
   }))
 
-  // Base columns
   const teamKey = findColKey(cols, "Team")
   const awardsKey =
     findColKey(cols, "Champs / Finals") ||
     findColKey(cols, "Champs/Finals") ||
     (baseCount >= 4 ? cols[baseCount - 1]?.key : null)
 
-  // Position-based bands (robust vs header changes)
   const recordsIdxs = [colCount - 3, colCount - 2, colCount - 1].filter(i => i >= baseCount)
   const totalIdxs = [colCount - 6, colCount - 5, colCount - 4].filter(i => i >= baseCount)
 
-  // Keys for those indices
   const recordsKeys = recordsIdxs.map(i => cols[i]?.key).filter(Boolean)
   const totalKeys = totalIdxs.map(i => cols[i]?.key).filter(Boolean)
 
@@ -143,12 +143,10 @@ function parseHistoryToSummaryMap(grid) {
 
     const awards = awardsKey ? s(obj[awardsKey]) : ""
 
-    // Records (Best*) from last 3 columns
     const bestRecordRaw = recordsKeys[0] ? obj[recordsKeys[0]] : ""
     const bestFptsAdj = recordsKeys[1] ? s(obj[recordsKeys[1]]) : ""
     const bestPlayoffs = recordsKeys[2] ? s(obj[recordsKeys[2]]) : ""
 
-    // Totals (optional)
     const totalRecordRaw = totalKeys[0] ? obj[totalKeys[0]] : ""
     const totalFptsAdj = totalKeys[1] ? s(obj[totalKeys[1]]) : ""
     const totalPlayoffsApps = totalKeys[2] ? s(obj[totalKeys[2]]) : ""
@@ -156,13 +154,9 @@ function parseHistoryToSummaryMap(grid) {
     byTeam[norm(team)] = {
       team,
       awards: awards || "",
-
-      // Records:
       bestRecordW: formatTenthsPercent(bestRecordRaw),
       bestFptsAdjusted: bestFptsAdj,
       bestPlayoffs: bestPlayoffs,
-
-      // Totals (not shown unless you want):
       totalRecordW: formatTenthsPercent(totalRecordRaw),
       totalFptsAdjusted: totalFptsAdj,
       totalPlayoffsAppearances: totalPlayoffsApps
@@ -188,24 +182,44 @@ function pickBestTeamMatch(map, decodedTeam) {
   return null
 }
 
+/* ----------------------------- helpers (Transactions) ----------------------------- */
+
+function isTrade(type) {
+  return s(type).toLowerCase() === "trade"
+}
+
+function dateSortable(d) {
+  const m = String(d || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+  if (!m) return 0
+  return Number(m[3]) * 10000 + Number(m[2]) * 100 + Number(m[1])
+}
+
 /* ----------------------------- component ----------------------------- */
 
 export default function TeamDetail() {
   const { table, loading, error } = useLeague()
   const { teamName } = useParams()
 
-  const [sortConfig, setSortConfig] = useState({
-    key: null,
-    direction: "asc"
-  })
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" })
 
   const [gmName, setGmName] = useState("")
   const [waiverByYear, setWaiverByYear] = useState({})
   const [picksByYear, setPicksByYear] = useState({})
   const [historySummary, setHistorySummary] = useState(null)
 
+  // ✅ Transactions (local fetch)
+  const [txRows, setTxRows] = useState([])
+  const [txLoading, setTxLoading] = useState(true)
+  const [txError, setTxError] = useState(null)
+
+  // ✅ filter buttons
+  const TX_TYPES = ["Trade", "Waiver", "Buy-out"]
+  const [txFilter, setTxFilter] = useState("Trade")
+
   const { data = [] } = table
   const decodedTeam = decodeURIComponent(teamName)
+
+  const teamKey = useMemo(() => normTeam(decodedTeam), [decodedTeam])
 
   const currentYear = new Date().getFullYear()
   const years = [currentYear, currentYear + 1, currentYear + 2, currentYear + 3]
@@ -213,7 +227,6 @@ export default function TeamDetail() {
   const CAP = 200
   const teamPlayers = data.filter(row => row["Current Owner"] === decodedTeam)
 
-  // logo naming rule: <slug>-logo.webp / <slug>-front.webp / <slug>-back.webp
   const teamSlug = useMemo(() => slugifyTeam(decodedTeam), [decodedTeam])
   const logoSrc = `/logos/${teamSlug}-logo.webp`
   const jerseyFrontSrc = `/logos/${teamSlug}-front.webp`
@@ -273,7 +286,7 @@ export default function TeamDetail() {
         }
         setWaiverByYear(extractedWaivers)
 
-        // PICKS
+        // PICKS (unchanged)
         const cleanCell = v => String(v ?? "").replace("\r", "").trim()
 
         const isMarked = v => {
@@ -392,14 +405,13 @@ export default function TeamDetail() {
 
         setPicksByYear(finalPicks)
       } catch (err) {
-        // keep silent (no console output)
+        // keep silent
       }
     }
 
     loadTeamSheet()
   }, [decodedTeam]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ✅ History summary fetch
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -420,6 +432,104 @@ export default function TeamDetail() {
       alive = false
     }
   }, [decodedTeam])
+
+  // ✅ Transactions fetch
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        setTxLoading(true)
+        setTxError(null)
+        const rows = await fetchTransactionsRows()
+        if (!alive) return
+        setTxRows(rows || [])
+      } catch (e) {
+        if (!alive) return
+        setTxError(e?.message || String(e))
+        setTxRows([])
+      } finally {
+        if (!alive) return
+        setTxLoading(false)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  // ✅ Grouped transactions for this team (1 card per transaction)
+  const teamTransactionsAll = useMemo(() => {
+    const groups = new Map()
+    for (const r of txRows) {
+      if (r?.txId == null || r.txId < 0) continue
+      if (!groups.has(r.txId)) groups.set(r.txId, [])
+      groups.get(r.txId).push(r)
+    }
+
+    const out = []
+
+    for (const [id, lines] of groups.entries()) {
+      lines.sort((a, b) => (a.rowIndex ?? 0) - (b.rowIndex ?? 0))
+      const head = lines[0] || {}
+
+      const aKey = normTeam(head.teamA)
+      const bKey = normTeam(head.teamB)
+      const trade = isTrade(head.type)
+
+      const involves = aKey === teamKey || (trade && bKey === teamKey)
+      if (!involves) continue
+
+      const viewingAsB = trade && bKey === teamKey
+
+      const sent = []
+      const received = []
+
+      for (const l of lines) {
+        const a = l.assetA ? `${l.assetA}${l.salaryA ? ` (${l.salaryA})` : ""}` : ""
+        const b = l.assetB ? `${l.assetB}${l.salaryB ? ` (${l.salaryB})` : ""}` : ""
+
+        if (!viewingAsB) {
+          if (a) sent.push(a)
+          if (b) received.push(b)
+        } else {
+          if (b) sent.push(b)
+          if (a) received.push(a)
+        }
+      }
+
+      out.push({
+        txId: id,
+        date: head.date,
+        type: head.type,
+        teamA: head.teamA,
+        teamB: head.teamB,
+        sent,
+        received,
+        lines
+      })
+    }
+
+    out.sort((x, y) => dateSortable(y.date) - dateSortable(x.date))
+    return out
+  }, [txRows, teamKey])
+
+  // ✅ Filtered by button
+  const teamTransactions = useMemo(() => {
+    const f = String(txFilter || "").trim().toLowerCase()
+    return teamTransactionsAll.filter(t => s(t.type).toLowerCase() === f)
+  }, [teamTransactionsAll, txFilter])
+
+  // Counts per type for button badges
+  const txCounts = useMemo(() => {
+    const c = { trade: 0, waiver: 0, buyout: 0 }
+    for (const t of teamTransactionsAll) {
+      const k = s(t.type).toLowerCase()
+      if (k === "trade") c.trade++
+      else if (k === "waiver") c.waiver++
+      else if (k === "buyout") c.buyout++
+    }
+    return c
+  }, [teamTransactionsAll])
 
   if (loading) return <div className="p-6 text-white">Loading...</div>
   if (error) return <div className="p-6 text-red-500">{error}</div>
@@ -501,8 +611,29 @@ export default function TeamDetail() {
     return <div className="whitespace-pre-line leading-5">{arr.join("\n")}</div>
   }
 
+  const filterBtnClass = active =>
+    `px-3 py-2 rounded-lg text-sm font-semibold border transition ${
+      active
+        ? "bg-orange-500/20 border-orange-400 text-orange-200"
+        : "bg-slate-900/40 border-slate-700 text-slate-300 hover:text-white hover:border-slate-500"
+    }`
+
+  const countFor = t => {
+    const k = t.toLowerCase()
+    if (k === "trade") return txCounts.trade
+    if (k === "waiver") return txCounts.waiver
+    if (k === "buyout") return txCounts.buyout
+    return 0
+  }
+
   return (
     <div className="min-h-screen bg-slate-900 p-4 text-white">
+      <div className="mb-4">
+        <Link className="text-orange-400 hover:underline" to="/teams">
+          ← Back to Teams
+        </Link>
+      </div>
+
       {/* ================= TOP 3 BOXES ================= */}
       <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
         {/* Box 1: Team Logo + Name + GM */}
@@ -623,7 +754,6 @@ export default function TeamDetail() {
           </tbody>
         </table>
 
-        {/* ================= PICKS TABLE (PRETTY) ================= */}
         <h2 className="text-lg font-semibold text-orange-400 mb-4">Draft Picks</h2>
 
         <div className="overflow-x-auto">
@@ -701,6 +831,106 @@ export default function TeamDetail() {
             </div>
           )
         })}
+
+      {/* ================= TRANSACTION HISTORY (TEAM) BELOW PLAYERS ================= */}
+      <div className="mb-10 bg-slate-800 p-4 rounded">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-orange-400">Transaction History</h2>
+            <div className="text-sm text-slate-300">
+              {txLoading ? "Loading..." : `${teamTransactionsAll.length} total`}
+            </div>
+          </div>
+
+          {/* ✅ filter buttons */}
+          <div className="flex flex-wrap gap-2">
+            {TX_TYPES.map(t => (
+              <button
+                key={t}
+                type="button"
+                className={filterBtnClass(txFilter === t)}
+                onClick={() => setTxFilter(t)}
+              >
+                {t}
+                <span className="ml-2 text-xs text-slate-300">
+                  ({countFor(t)})
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {txError ? (
+          <div className="mt-3 text-red-300">{txError}</div>
+        ) : txLoading ? (
+          <div className="mt-3 text-slate-300">Loading transactions…</div>
+        ) : teamTransactions.length === 0 ? (
+          <div className="mt-3 text-slate-300">No {txFilter} transactions found.</div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {teamTransactions.map(tx => (
+              <details
+                key={tx.txId}
+                className="bg-slate-900/60 border border-slate-700 rounded-xl p-4"
+              >
+                <summary className="cursor-pointer list-none">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div className="font-semibold text-slate-100">
+                      {tx.date} • <span className="text-orange-300">{tx.type}</span>
+                    </div>
+                    <div className="text-sm text-slate-300">
+                      {tx.teamA || "-"}
+                      {isTrade(tx.type) ? " ↔ " : " → "}
+                      {isTrade(tx.type) ? tx.teamB || "-" : ""}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 text-sm text-slate-200">
+                    <span className="text-slate-400">Sent:</span>{" "}
+                    {tx.sent.length ? tx.sent.join(", ") : "-"}
+                  </div>
+
+                  {isTrade(tx.type) ? (
+                    <div className="mt-1 text-sm text-slate-200">
+                      <span className="text-slate-400">Received:</span>{" "}
+                      {tx.received.length ? tx.received.join(", ") : "-"}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-2 text-xs text-slate-400">Click to expand details</div>
+                </summary>
+
+                <div className="mt-4 overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-slate-300">
+                        <th className="text-left py-2 pr-4">Team A</th>
+                        <th className="text-left py-2 pr-4">Asset</th>
+                        <th className="text-left py-2 pr-4">Salary</th>
+                        <th className="text-left py-2 pr-4">Team B</th>
+                        <th className="text-left py-2 pr-4">Asset</th>
+                        <th className="text-left py-2 pr-4">Salary</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tx.lines.map((l, i) => (
+                        <tr key={i} className="border-t border-slate-700">
+                          <td className="py-2 pr-4 text-slate-200">{l.teamA || "-"}</td>
+                          <td className="py-2 pr-4 text-slate-200">{l.assetA || "-"}</td>
+                          <td className="py-2 pr-4 text-slate-200">{l.salaryA || "-"}</td>
+                          <td className="py-2 pr-4 text-slate-200">{l.teamB || ""}</td>
+                          <td className="py-2 pr-4 text-slate-200">{l.assetB || "-"}</td>
+                          <td className="py-2 pr-4 text-slate-200">{l.salaryB || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
