@@ -3,10 +3,9 @@ import { NavLink } from "react-router-dom"
 const tiles = [
   { to: "/players", label: "Players", desc: "Browse player list & details" },
   { to: "/teams", label: "Teams", desc: "All teams + rosters" },
-  { to: "/playerdata", label: "PlayerData", desc: "Raw sheet data table" },
+  { to: "/history", label: "History", desc: "DSL League history" },
   { to: "/tradeanalyzer", label: "Trade Analyzer", desc: "Cap + FP impact tools" },
   { to: "/querybox", label: "Nolifer's Corner", desc: "Custom queries & experiments" },
-  { to: "/teamsheets", label: "TeamSheets", desc: "Team sheet views" },
 ]
 
 export default function Dashboard() {
