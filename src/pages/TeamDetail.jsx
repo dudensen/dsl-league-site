@@ -745,61 +745,68 @@ export default function TeamDetail() {
         </div>
       </div>
 
-      {/* ================= SALARY SUMMARY ================= */}
-      <div className="mb-10 bg-slate-800 p-4 rounded">
-        <h2 className="text-lg font-semibold text-orange-400 mb-4">Salary Summary</h2>
+      {/* ================= SALARY + PICKS (SIDE-BY-SIDE on md+, STACK on mobile) ================= */}
+      <div className="mb-10 grid grid-cols-1 gap-4 md:grid-cols-2">
+        {/* Salary Summary card */}
+        <div className="bg-slate-800 p-4 rounded">
+          <h2 className="text-lg font-semibold text-orange-400 mb-4">Salary Summary</h2>
 
-        <table className="min-w-full text-sm mb-8">
-          <thead>
-            <tr className="bg-slate-700 text-orange-400">
-              <th className="p-2 text-left">Year</th>
-              <th className="p-2 text-right">Roster</th>
-              <th className="p-2 text-right">Minors</th>
-              <th className="p-2 text-right">Waiver</th>
-              <th className="p-2 text-right">Cap Space</th>
-            </tr>
-          </thead>
-          <tbody>
-            {years.map(year => (
-              <tr key={year} className="border-b border-slate-700">
-                <td className="p-2 font-semibold">{year}</td>
-                <td className="p-2 text-right">${salarySummary[year].roster}m</td>
-                <td className="p-2 text-right">${salarySummary[year].minors}m</td>
-                <td className="p-2 text-right text-yellow-400">${salarySummary[year].waiver}m</td>
-                <td
-                  className={`p-2 text-right ${
-                    salarySummary[year].capSpace < 0 ? "text-red-400" : "text-green-400"
-                  }`}
-                >
-                  ${salarySummary[year].capSpace}m
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        {/* ================= PICKS TABLE (PRETTY) ================= */}
-        <h2 className="text-lg font-semibold text-orange-400 mb-4">Draft Picks</h2>
-
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="bg-slate-700 text-orange-400">
-                <th className="p-2 text-left w-24">Year</th>
-                <th className="p-2 text-left">Round A Picks</th>
-                <th className="p-2 text-left">Round B Picks</th>
-              </tr>
-            </thead>
-            <tbody>
-              {years.map(year => (
-                <tr key={year} className="border-b border-slate-700 align-top">
-                  <td className="p-2 font-semibold">{year}</td>
-                  <td className="p-2">{renderPickLines(picksByYear[year]?.A)}</td>
-                  <td className="p-2">{renderPickLines(picksByYear[year]?.B)}</td>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="bg-slate-700 text-orange-400">
+                  <th className="p-2 text-left">Year</th>
+                  <th className="p-2 text-right">Roster</th>
+                  <th className="p-2 text-right">Minors</th>
+                  <th className="p-2 text-right">Waiver</th>
+                  <th className="p-2 text-right">Cap Space</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {years.map(year => (
+                  <tr key={year} className="border-b border-slate-700">
+                    <td className="p-2 font-semibold">{year}</td>
+                    <td className="p-2 text-right">${salarySummary[year].roster}m</td>
+                    <td className="p-2 text-right">${salarySummary[year].minors}m</td>
+                    <td className="p-2 text-right text-yellow-400">${salarySummary[year].waiver}m</td>
+                    <td
+                      className={`p-2 text-right ${
+                        salarySummary[year].capSpace < 0 ? "text-red-400" : "text-green-400"
+                      }`}
+                    >
+                      ${salarySummary[year].capSpace}m
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Draft Picks card */}
+        <div className="bg-slate-800 p-4 rounded">
+          <h2 className="text-lg font-semibold text-orange-400 mb-4">Draft Picks</h2>
+
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="bg-slate-700 text-orange-400">
+                  <th className="p-2 text-left w-24">Year</th>
+                  <th className="p-2 text-left">Round A Picks</th>
+                  <th className="p-2 text-left">Round B Picks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {years.map(year => (
+                  <tr key={year} className="border-b border-slate-700 align-top">
+                    <td className="p-2 font-semibold">{year}</td>
+                    <td className="p-2">{renderPickLines(picksByYear[year]?.A)}</td>
+                    <td className="p-2">{renderPickLines(picksByYear[year]?.B)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
