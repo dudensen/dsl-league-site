@@ -6,6 +6,7 @@ const tiles = [
   { to: "/history", label: "History", desc: "DSL League history" },
   { to: "/tradeanalyzer", label: "Trade Analyzer", desc: "Cap + FP impact tools" },
   { to: "/querybox", label: "Nolifer's Corner", desc: "Custom queries & experiments" },
+  { to: "/constitution", label: "THE Constitution", desc: "The Summer Holy Bible of Rules and Regulations" },
 ]
 
 export default function Dashboard() {

@@ -31,6 +31,7 @@ export default function Sidebar() {
         <NavLink to="/tradeanalyzer" className={({ isActive }) => `${baseClass} ${isActive ? activeClass : inactiveClass}`}>Trade Analyzer</NavLink>
         <NavLink to="/querybox" className={({ isActive }) => `${baseClass} ${isActive ? activeClass : inactiveClass}`}>Nolifer's Corner</NavLink>
         <NavLink to="/history" className={({ isActive }) => `${baseClass} ${isActive ? activeClass : inactiveClass}`}>League History</NavLink>
+        <NavLink to="/constitution" className={({ isActive }) => `${baseClass} ${isActive ? activeClass : inactiveClass}`}>THE Constitution</NavLink>
       </nav>
     </aside>
   )

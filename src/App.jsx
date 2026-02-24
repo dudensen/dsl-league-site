@@ -11,6 +11,7 @@ import PlayerDetail from "./pages/PlayerDetail"
 import TradeAnalyzerPage from "./pages/TradeAnalyzer"
 import QueryBox from "./pages/QueryBox"
 import Dashboard from "./pages/Dashboard"
+import Constitution from "./pages/Constitution"
 import History from "./pages/History";
 
 export default function App() {
@@ -34,6 +35,7 @@ export default function App() {
               <Route path="/teamsheets" element={<TeamSheets />} />
               <Route path="/teams/:teamName" element={<TeamDetail />} />
               <Route path="/history" element={<History />} />
+              <Route path="/constitution" element={<Constitution />} />
             </Routes>
           </div>
         </div>
