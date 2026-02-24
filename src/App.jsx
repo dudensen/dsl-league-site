@@ -14,6 +14,8 @@ import Dashboard from "./pages/Dashboard"
 import Constitution from "./pages/Constitution"
 import History from "./pages/History";
 
+import PlayerOptions from "./pages/PlayerOptions"
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -36,6 +38,7 @@ export default function App() {
               <Route path="/teams/:teamName" element={<TeamDetail />} />
               <Route path="/history" element={<History />} />
               <Route path="/constitution" element={<Constitution />} />
+              <Route path="/PlayerOptions" element={<PlayerOptions />} />
             </Routes>
           </div>
         </div>

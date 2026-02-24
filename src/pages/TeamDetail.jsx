@@ -6,6 +6,7 @@ import { fetchTeamSheet } from "../utils/fetchTeamSheet"
 import { TEAM_SHEETS } from "../config/teamSheets"
 import { fetchHistoryTable } from "../utils/fetchHistory"
 import { fetchTransactionsRows } from "../utils/fetchTransactions"
+import { fetchPlayerOptions, getOptionForPlayerYear, optionLabel } from "../utils/fetchPlayerOptions"
 
 /* ----------------------------- helpers (History summary) ----------------------------- */
 
@@ -96,19 +97,13 @@ function formatTenthsPercent(raw) {
   return `${(n / 10).toFixed(1).replace(".", ",")}%`
 }
 
-/**
- * History sheet summary:
- * - Best Records triplet = LAST 3 columns (always)
- * - Total triplet = 3 columns before that (optional)
- * - Team + Awards are in the base columns.
- */
 function parseHistoryToSummaryMap(grid) {
   const rows = Array.isArray(grid) ? grid : []
   if (rows.length < 2) return {}
 
   const headerRowRaw = rows[1] || []
   const colCount = headerRowRaw.length
-  if (colCount < 8) return {} // too small
+  if (colCount < 8) return {}
 
   const headerRow = new Array(colCount).fill("").map((_, i) => s(headerRowRaw[i]))
   const baseCount = getBaseCount(headerRow)
@@ -120,14 +115,12 @@ function parseHistoryToSummaryMap(grid) {
     header: headerRow[idx] || key
   }))
 
-  // Base columns
   const teamKey = findColKey(cols, "Team")
   const awardsKey =
     findColKey(cols, "Champs / Finals") ||
     findColKey(cols, "Champs/Finals") ||
     (baseCount >= 4 ? cols[baseCount - 1]?.key : null)
 
-  // Position-based bands
   const recordsIdxs = [colCount - 3, colCount - 2, colCount - 1].filter(i => i >= baseCount)
   const totalIdxs = [colCount - 6, colCount - 5, colCount - 4].filter(i => i >= baseCount)
 
@@ -152,12 +145,10 @@ function parseHistoryToSummaryMap(grid) {
 
     const awards = awardsKey ? s(obj[awardsKey]) : ""
 
-    // Records (last 3 columns)
     const bestRecordRaw = recordsKeys[0] ? obj[recordsKeys[0]] : ""
     const bestFptsAdj = recordsKeys[1] ? s(obj[recordsKeys[1]]) : ""
     const bestPlayoffs = recordsKeys[2] ? s(obj[recordsKeys[2]]) : ""
 
-    // Totals (optional)
     const totalRecordRaw = totalKeys[0] ? obj[totalKeys[0]] : ""
     const totalFptsAdj = totalKeys[1] ? s(obj[totalKeys[1]]) : ""
     const totalPlayoffsApps = totalKeys[2] ? s(obj[totalKeys[2]]) : ""
@@ -197,22 +188,79 @@ function pickBestTeamMatch(map, decodedTeam) {
 /* ----------------------------- helpers (Transactions) ----------------------------- */
 
 function canonTxType(t) {
-  // handles: "Buy-out", "Buy–out", "Buy out", NBSP, weird dashes, etc.
   return s(t)
     .toLowerCase()
-    .replace(/[\u00A0\s]/g, "") // spaces + NBSP
-    .replace(/[-_–—]/g, "") // dash variants
+    .replace(/[\u00A0\s]/g, "")
+    .replace(/[-_–—]/g, "")
 }
 
 function isTrade(type) {
   return canonTxType(type) === "trade"
 }
 
-// dd/mm/yyyy -> sortable yyyymmdd
 function dateSortable(d) {
   const m = String(d || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
   if (!m) return 0
   return Number(m[3]) * 10000 + Number(m[2]) * 100 + Number(m[1])
+}
+
+/* ----------------------------- helpers (Contracts by position) ----------------------------- */
+
+function normPos(p) {
+  const x = s(p).toUpperCase()
+  if (!x) return null
+  if (x.startsWith("G")) return "G"
+  if (x.startsWith("F")) return "F"
+  if (x.startsWith("C")) return "C"
+  return null
+}
+
+/* ----------------------------- Player Options Badges ----------------------------- */
+
+function OptionBadge({ tp }) {
+  if (!tp) return null
+  const isT = tp === "T"
+  const text = isT ? "TO" : "PO"
+
+  return (
+    <span
+      className={[
+        "inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border align-middle",
+        isT
+          ? "bg-emerald-500/10 text-emerald-200 border-emerald-500/30"
+          : "bg-sky-500/10 text-sky-200 border-sky-500/30"
+      ].join(" ")}
+      title={optionLabel(tp)}
+    >
+      {text}
+    </span>
+  )
+}
+
+function TypeBadge({ t }) {
+  const v = s(t).toUpperCase()
+  if (!v || v === "-") return <span className="text-slate-400">-</span>
+
+  const map = {
+    R: { label: "Rookie", title: "Rookie", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
+    M: { label: "Minor", title: "Minor", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
+    C: { label: "Captain", title: "Captain", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" }
+  }
+
+  const conf = map[v]
+  if (!conf) return <span className="text-slate-300">{v}</span>
+
+  return (
+    <span
+      className={[
+        "inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border",
+        conf.cls
+      ].join(" ")}
+      title={conf.title}
+    >
+      {conf.label}
+    </span>
+  )
 }
 
 /* ----------------------------- component ----------------------------- */
@@ -220,20 +268,26 @@ function dateSortable(d) {
 export default function TeamDetail() {
   const { table, loading, error } = useLeague()
   const { teamName } = useParams()
+  const [optionsByPlayerYear, setOptionsByPlayerYear] = useState({})
+
+  useEffect(() => {
+    const ac = new AbortController()
+    fetchPlayerOptions(ac.signal)
+      .then(res => setOptionsByPlayerYear(res.byPlayerYear || {}))
+      .catch(() => setOptionsByPlayerYear({}))
+    return () => ac.abort()
+  }, [])
 
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" })
-
   const [gmName, setGmName] = useState("")
   const [waiverByYear, setWaiverByYear] = useState({})
   const [picksByYear, setPicksByYear] = useState({})
   const [historySummary, setHistorySummary] = useState(null)
 
-  // ✅ Transactions (local fetch)
   const [txRows, setTxRows] = useState([])
   const [txLoading, setTxLoading] = useState(true)
   const [txError, setTxError] = useState(null)
 
-  // ✅ filter buttons
   const TX_TYPES = ["Trade", "Waiver", "Buy-out"]
   const [txFilter, setTxFilter] = useState("Trade")
 
@@ -248,7 +302,32 @@ export default function TeamDetail() {
   const CAP = 200
   const teamPlayers = data.filter(row => row["Current Owner"] === decodedTeam)
 
-  // logo naming rule: <slug>-logo.webp / <slug>-front.webp / <slug>-back.webp
+  const contractsByPos = useMemo(() => {
+    const out = {
+      G: { roster: 0, minors: 0 },
+      F: { roster: 0, minors: 0 },
+      C: { roster: 0, minors: 0 }
+    }
+
+    for (const p of teamPlayers) {
+      const pos = normPos(p["Position"])
+      if (!pos) continue
+      const isMinor = s(p["Rookie / Minor / Captain"]).toUpperCase() === "M"
+      if (isMinor) out[pos].minors += 1
+      else out[pos].roster += 1
+    }
+    return out
+  }, [teamPlayers])
+
+  const rosterTotal = useMemo(() => {
+    return (contractsByPos.G?.roster || 0) + (contractsByPos.F?.roster || 0) + (contractsByPos.C?.roster || 0)
+  }, [contractsByPos])
+
+  const posLabel = { G: "Guards", F: "Forwards", C: "Centers" }
+  const posMax = { G: 8, F: 8, C: 4 }
+  const posMin = { G: 5, F: 5, C: 2 }
+  const ROSTER_TOTAL_LIMIT = 15
+
   const teamSlug = useMemo(() => slugifyTeam(decodedTeam), [decodedTeam])
   const logoSrc = `/logos/${teamSlug}-logo.webp`
   const jerseyFrontSrc = `/logos/${teamSlug}-front.webp`
@@ -310,7 +389,6 @@ export default function TeamDetail() {
 
         // PICKS
         const cleanCell = v => String(v ?? "").replace("\r", "").trim()
-
         const isMarked = v => {
           const s = cleanCell(v).toLowerCase()
           return s === "x" || s === "✓" || s === "1" || s === "yes" || s === "y" || s === "true"
@@ -334,7 +412,6 @@ export default function TeamDetail() {
         }
 
         const pickNameCol = picksColIndex >= 0 ? picksColIndex : 1
-
         let yearColumnMap = {}
 
         const candidateHeaderRows = [
@@ -434,7 +511,6 @@ export default function TeamDetail() {
     loadTeamSheet()
   }, [decodedTeam]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ✅ History summary fetch
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -442,7 +518,6 @@ export default function TeamDetail() {
         const res = await fetchHistoryTable()
         const grid = res?.grid
         const map = parseHistoryToSummaryMap(grid)
-
         const match = pickBestTeamMatch(map, decodedTeam)
         if (!alive) return
         setHistorySummary(match || null)
@@ -456,7 +531,6 @@ export default function TeamDetail() {
     }
   }, [decodedTeam])
 
-  // ✅ Transactions fetch (local)
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -480,7 +554,6 @@ export default function TeamDetail() {
     }
   }, [])
 
-  // ✅ Grouped transactions for this team (1 card per transaction)
   const teamTransactionsAll = useMemo(() => {
     const groups = new Map()
     for (const r of txRows) {
@@ -502,7 +575,6 @@ export default function TeamDetail() {
       const involves = aKey === teamKey || (trade && bKey === teamKey)
       if (!involves) continue
 
-      // perspective: if viewing team is Team B in a trade, flip sent/received
       const viewingAsB = trade && bKey === teamKey
 
       const sent = []
@@ -537,13 +609,11 @@ export default function TeamDetail() {
     return out
   }, [txRows, teamKey])
 
-  // ✅ Filtered by button (canonical)
   const teamTransactions = useMemo(() => {
     const f = canonTxType(txFilter)
     return teamTransactionsAll.filter(t => canonTxType(t.type) === f)
   }, [teamTransactionsAll, txFilter])
 
-  // ✅ Counts per type (canonical)
   const txCounts = useMemo(() => {
     const c = { trade: 0, waiver: 0, buyout: 0 }
     for (const t of teamTransactionsAll) {
@@ -649,6 +719,9 @@ export default function TeamDetail() {
     if (k === "buyout") return txCounts.buyout
     return 0
   }
+
+  // ✅ used to ensure only G/F/C tables render & with proper labels
+  const POS_ORDER = ["G", "F", "C"]
 
   return (
     <div className="min-h-screen bg-slate-900 p-4 text-white">
@@ -756,7 +829,7 @@ export default function TeamDetail() {
               <thead>
                 <tr className="bg-slate-700 text-orange-400">
                   <th className="p-2 text-left">Year</th>
-                  <th className="p-2 text-right">Roster</th>
+                  <th className="p-2 text-right">Roster <br /> (incl Waivers)</th>
                   <th className="p-2 text-right">Minors</th>
                   <th className="p-2 text-right">Waiver</th>
                   <th className="p-2 text-right">Cap Space</th>
@@ -808,61 +881,157 @@ export default function TeamDetail() {
             </table>
           </div>
         </div>
+
+        {/* Contracts by Position */}
+        <div className="bg-slate-800 p-4 rounded md:col-span-2">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-orange-400">
+              Contracts{" "}
+              (Total:{" "}
+              <span className={`${rosterTotal > ROSTER_TOTAL_LIMIT ? "text-red-400" : "text-slate-200"}`}>
+                {rosterTotal}
+              </span>
+              <span className="text-slate-500">/{ROSTER_TOTAL_LIMIT}</span>
+              )
+            </h2>
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {POS_ORDER.map(k => {
+              const min = posMin[k]
+              const max = posMax[k]
+              const roster = contractsByPos[k]?.roster || 0
+              const minors = contractsByPos[k]?.minors || 0
+              const bad = roster < min || roster > max
+              const deficit = min - roster
+              const surplus = roster - max
+
+              let msg = ""
+              if (deficit > 0) msg = `You need ${deficit} more for the minimum — please sign more players.`
+              else if (surplus > 0) msg = `You are over the maximum — please waive/trade ${surplus} player${surplus === 1 ? "" : "s"}.`
+
+              return (
+                <div
+                  key={k}
+                  className="rounded-lg bg-slate-900/60 border border-slate-700 p-3"
+                >
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                    {posLabel[k]} (Min {min} • Max {max})
+                  </div>
+
+                  <div className="mt-1 flex items-end gap-1">
+                    <span className={`text-3xl font-bold leading-none ${bad ? "text-red-400" : "text-white"}`}>
+                      {roster}
+                    </span>
+                  </div>
+
+                  {msg ? (
+                    <div className="mt-2 text-xs font-semibold text-red-300">{msg}</div>
+                  ) : (
+                    <div className="mt-2 text-xs text-green-300">Within limits</div>
+                  )}
+
+                  <div className="mt-1 text-xs text-slate-300">
+                    Minors: <span className="text-slate-100 font-semibold">{minors}</span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
       </div>
 
       {/* ================= PLAYER TABLES ================= */}
-      {["G", "F", "C"]
-        .filter(pos => groupedPlayers[pos])
-        .map(position => {
-          const players = sortData(groupedPlayers[position])
+      
 
-          return (
-            <div key={position} className="mb-8">
-              <h2 className="text-xl font-semibold mb-3">{position}</h2>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="bg-slate-700 text-orange-400">
-                      <th onClick={() => handleSort("Player")} className="p-2 cursor-pointer">
-                        Player
-                      </th>
+      {POS_ORDER.filter(pos => groupedPlayers[pos]).map(position => {
+        const players = sortData(groupedPlayers[position])
+
+        return (
+          <div key={position} className="mb-8">
+            {/* ✅ Show full names instead of letters */}
+            <h2 className="text-xl font-semibold mb-3">{posLabel[position]}</h2>
+
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-700 text-orange-400">
+                    <th onClick={() => handleSort("Player")} className="p-2 cursor-pointer">
+                      Player
+                    </th>
+                    <th
+                      onClick={() => handleSort("Rookie / Minor / Captain")}
+                      className="p-2 cursor-pointer text-center"
+                    >
+                      Type
+                    </th>
+                    {years.map(y => (
                       <th
-                        onClick={() => handleSort("Rookie / Minor / Captain")}
-                        className="p-2 cursor-pointer"
+                        key={y}
+                        onClick={() => handleSort(String(y))}
+                        className="p-2 text-right cursor-pointer"
                       >
-                        Type
+                        {y}
                       </th>
-                      {years.map(y => (
-                        <th
-                          key={y}
-                          onClick={() => handleSort(String(y))}
-                          className="p-2 text-right cursor-pointer"
-                        >
-                          {y}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {players.map((player, index) => (
-                      <tr key={index} className="border-b border-slate-700 hover:bg-slate-800">
-                        <td className="p-2 font-semibold">{player["Player"]}</td>
-                        <td className="p-2 text-center">
-                          {player["Rookie / Minor / Captain"] || "-"}
-                        </td>
-                        {years.map(y => (
-                          <td key={y} className="p-2 text-right">
-                            {player[String(y)] || "-"}
-                          </td>
-                        ))}
-                      </tr>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {players.map((player, index) => (
+                    <tr
+                      key={index}
+                      className="border-b border-slate-700 hover:bg-slate-800"
+                    >
+                      {/* slightly tighter row */}
+                      <td className="p-2 font-semibold">{player["Player"]}</td>
+                      <td className="p-2 text-center">
+                        <TypeBadge t={player["Rookie / Minor / Captain"]} />
+                      </td>
+
+                      {years.map(y => {
+                        const yearStr = String(y)
+                        const salary = player[yearStr] || "-"
+                        const playerName = player.Player || player.Name || player.__col_0 || ""
+                        const tp = getOptionForPlayerYear(optionsByPlayerYear, playerName, yearStr)
+
+                        return (
+                          // ✅ more compact salary cells
+                          <td key={y} className="p-1.5">
+                            <div className="flex justify-end items-center gap-2 whitespace-nowrap">
+                              {salary !== "-" && <OptionBadge tp={tp} />}
+                              <span className="text-right tabular-nums leading-none">
+                                {salary}
+                              </span>
+                            </div>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          )
-        })}
+          </div>
+        )
+      })}
+      {/* ✅ Badge disclaimer */}
+      <div className="mb-4 rounded-xl border border-slate-700 bg-slate-900/40 p-3">
+        <div className="text-sm text-slate-200 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="inline-flex items-center gap-2">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-emerald-500/10 text-emerald-200 border-emerald-500/30">
+              TO
+            </span>
+            <span className="text-slate-300">= Team Option</span>
+          </span>
+          <span className="inline-flex items-center gap-2">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-sky-500/10 text-sky-200 border-sky-500/30">
+              PO
+            </span>
+            <span className="text-slate-300">= Player Option</span>
+          </span>
+        </div>
+      </div>
 
       {/* ================= TRANSACTION HISTORY (TEAM) BELOW PLAYERS ================= */}
       <div className="mb-10 bg-slate-800 p-4 rounded">
