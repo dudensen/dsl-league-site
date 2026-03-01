@@ -15,6 +15,11 @@ function s(x) {
   return String(x ?? "").replace(/\r/g, "").trim()
 }
 
+function isExcludedType(v) {
+  const t = s(v).toUpperCase()
+  return t === "M" || t === "IRE"
+}
+
 function getOverviewEntry(map, teamName) {
   const want = normTeam(teamName)
   for (const [k, v] of Object.entries(map || {})) {
@@ -253,7 +258,8 @@ function TypeBadgeSmall({ t }) {
   const map = {
     R: { label: "R", title: "Rookie", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
     M: { label: "M", title: "Minor", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
-    C: { label: "C", title: "Captain", cls: "bg-violet-600 text-white border-emerald-500/30" }
+    C: { label: "C", title: "Captain", cls: "bg-violet-600 text-white border-emerald-500/30" },
+    IRE: { label: "IRE", title: "Injured Reserve Exception", cls: "bg-red-500/15 text-white border-red-500/40" }
   }
 
   const conf = map[v]
@@ -328,8 +334,9 @@ export default function TeamDetail() {
     for (const p of teamPlayers) {
       const pos = normPos(p?.["Position"])
       if (!pos) continue
-      const isMinor = s(p?.["Rookie / Minor / Captain"]).toUpperCase() === "M"
-      if (isMinor) out[pos].minors += 1
+      const t = p?.["Rookie / Minor / Captain"]
+      const excluded = isExcludedType(t)
+      if (excluded) out[pos].minors += 1
       else out[pos].roster += 1
     }
     return out
@@ -353,7 +360,8 @@ export default function TeamDetail() {
         const salary = parseFloat(cleaned)
         if (isNaN(salary)) continue
 
-        if (player?.["Rookie / Minor / Captain"] === "M") minors += salary
+        const excluded = isExcludedType(player?.["Rookie / Minor / Captain"])
+        if (excluded) minors += salary
         else roster += salary
       }
 
@@ -1126,6 +1134,12 @@ export default function TeamDetail() {
             M
           </span>
           <span className="text-slate-300">= Minor</span>
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-red-500/15 text-white border-red-500/40">
+            IRE
+          </span>
+          <span className="text-slate-300">= Injury Exception</span>
         </span>
       </div>
     </div>
