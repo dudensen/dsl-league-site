@@ -150,7 +150,7 @@ function parseHistoryToSummaryMap(grid) {
     const bestPlayoffs = recordsKeys[2] ? s(obj[recordsKeys[2]]) : ""
 
     const totalRecordRaw = totalKeys[0] ? obj[totalKeys[0]] : ""
-    const totalFptsAdj = totalKeys[1] ? s(obj[totalKeys[1]]) : ""
+    const totalFptsAdj = recordsKeys[1] ? s(obj[recordsKeys[1]]) : ""
     const totalPlayoffsApps = totalKeys[2] ? s(obj[totalKeys[2]]) : ""
 
     byTeam[norm(team)] = {
@@ -225,7 +225,7 @@ function OptionBadge({ tp }) {
   return (
     <span
       className={[
-        "inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border align-middle",
+        "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border align-middle",
         isT
           ? "bg-emerald-500/10 text-emerald-200 border-emerald-500/30"
           : "bg-sky-500/10 text-sky-200 border-sky-500/30"
@@ -237,23 +237,23 @@ function OptionBadge({ tp }) {
   )
 }
 
-function TypeBadge({ t }) {
+function TypeBadgeSmall({ t }) {
   const v = s(t).toUpperCase()
-  if (!v || v === "-") return <span className="text-slate-400">-</span>
+  if (!v || v === "-") return <span className="text-slate-500">-</span>
 
   const map = {
-    R: { label: "Rookie", title: "Rookie", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
-    M: { label: "Minor", title: "Minor", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
-    C: { label: "Captain", title: "Captain", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" }
+    R: { label: "R", title: "Rookie", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
+    M: { label: "M", title: "Minor", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
+    C: { label: "C", title: "Captain", cls: "bg-violet-600 text-white border-emerald-500/30" }
   }
 
   const conf = map[v]
-  if (!conf) return <span className="text-slate-300">{v}</span>
+  if (!conf) return <span className="text-slate-300 text-xs">{v}</span>
 
   return (
     <span
       className={[
-        "inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border",
+        "inline-flex items-center justify-center w-7 h-5 rounded-full text-[10px] font-bold border",
         conf.cls
       ].join(" ")}
       title={conf.title}
@@ -268,17 +268,13 @@ function TypeBadge({ t }) {
 export default function TeamDetail() {
   const { table, loading, error } = useLeague()
   const { teamName } = useParams()
+
+  // ✅ states (hooks must be before any conditional return)
   const [optionsByPlayerYear, setOptionsByPlayerYear] = useState({})
-
-  useEffect(() => {
-    const ac = new AbortController()
-    fetchPlayerOptions(ac.signal)
-      .then(res => setOptionsByPlayerYear(res.byPlayerYear || {}))
-      .catch(() => setOptionsByPlayerYear({}))
-    return () => ac.abort()
-  }, [])
-
+  const [activeTab, setActiveTab] = useState("salary") // "salary" | "data"
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" })
+  const [dataSortConfig, setDataSortConfig] = useState({ key: "Rank", direction: "asc" })
+
   const [gmName, setGmName] = useState("")
   const [waiverByYear, setWaiverByYear] = useState({})
   const [picksByYear, setPicksByYear] = useState({})
@@ -291,28 +287,39 @@ export default function TeamDetail() {
   const TX_TYPES = ["Trade", "Waiver", "Buy-out"]
   const [txFilter, setTxFilter] = useState("Trade")
 
-  const { data = [] } = table
+  // ✅ safe destructuring
+  const { data = [], headers = [], displayMap = {} } = table || {}
   const decodedTeam = decodeURIComponent(teamName)
 
-  const teamKey = useMemo(() => normTeam(decodedTeam), [decodedTeam])
-
+  // ✅ derived constants (no hooks)
   const currentYear = new Date().getFullYear()
   const years = [currentYear, currentYear + 1, currentYear + 2, currentYear + 3]
-
   const CAP = 200
-  const teamPlayers = data.filter(row => row["Current Owner"] === decodedTeam)
+
+  // ✅ memos BEFORE early returns
+  const teamKey = useMemo(() => normTeam(decodedTeam), [decodedTeam])
+
+  const teamPlayers = useMemo(() => {
+    return (data || []).filter(row => row?.["Current Owner"] === decodedTeam)
+  }, [data, decodedTeam])
+
+  const teamSlug = useMemo(() => slugifyTeam(decodedTeam), [decodedTeam])
+  const logoSrc = `/logos/${teamSlug}-logo.webp`
+  const jerseyFrontSrc = `/logos/${teamSlug}-front.webp`
+  const jerseyBackSrc = `/logos/${teamSlug}-back.webp`
+
+  const posLabel = useMemo(() => ({ G: "Guards", F: "Forwards", C: "Centers" }), [])
+  const posMax = useMemo(() => ({ G: 8, F: 8, C: 4 }), [])
+  const posMin = useMemo(() => ({ G: 5, F: 5, C: 2 }), [])
+  const ROSTER_TOTAL_LIMIT = 15
+  const POS_ORDER = ["G", "F", "C"]
 
   const contractsByPos = useMemo(() => {
-    const out = {
-      G: { roster: 0, minors: 0 },
-      F: { roster: 0, minors: 0 },
-      C: { roster: 0, minors: 0 }
-    }
-
+    const out = { G: { roster: 0, minors: 0 }, F: { roster: 0, minors: 0 }, C: { roster: 0, minors: 0 } }
     for (const p of teamPlayers) {
-      const pos = normPos(p["Position"])
+      const pos = normPos(p?.["Position"])
       if (!pos) continue
-      const isMinor = s(p["Rookie / Minor / Captain"]).toUpperCase() === "M"
+      const isMinor = s(p?.["Rookie / Minor / Captain"]).toUpperCase() === "M"
       if (isMinor) out[pos].minors += 1
       else out[pos].roster += 1
     }
@@ -323,237 +330,69 @@ export default function TeamDetail() {
     return (contractsByPos.G?.roster || 0) + (contractsByPos.F?.roster || 0) + (contractsByPos.C?.roster || 0)
   }, [contractsByPos])
 
-  const posLabel = { G: "Guards", F: "Forwards", C: "Centers" }
-  const posMax = { G: 8, F: 8, C: 4 }
-  const posMin = { G: 5, F: 5, C: 2 }
-  const ROSTER_TOTAL_LIMIT = 15
+  const salarySummary = useMemo(() => {
+    const out = {}
+    for (const year of years) {
+      let roster = 0
+      let minors = 0
 
-  const teamSlug = useMemo(() => slugifyTeam(decodedTeam), [decodedTeam])
-  const logoSrc = `/logos/${teamSlug}-logo.webp`
-  const jerseyFrontSrc = `/logos/${teamSlug}-front.webp`
-  const jerseyBackSrc = `/logos/${teamSlug}-back.webp`
+      for (const player of teamPlayers) {
+        const raw = player?.[String(year)] || ""
+        if (!raw) continue
 
-  const onImgError = fallback => e => {
-    e.currentTarget.onerror = null
-    e.currentTarget.src = fallback
-  }
+        const cleaned = String(raw).replace("$", "").replace("m", "").trim()
+        const salary = parseFloat(cleaned)
+        if (isNaN(salary)) continue
 
-  useEffect(() => {
-    async function loadTeamSheet() {
-      const teamConfig = TEAM_SHEETS[decodedTeam]
-      if (!teamConfig) return
+        if (player?.["Rookie / Minor / Captain"] === "M") minors += salary
+        else roster += salary
+      }
 
-      try {
-        const rows = await fetchTeamSheet(teamConfig.gid)
+      const waiver = waiverByYear[year] || 0
 
-        // GM
-        let gmFound = null
-        rows.forEach(r => {
-          r.forEach(cell => {
-            if (typeof cell === "string" && cell.toLowerCase().includes("gm:")) {
-              gmFound = cell
-            }
-          })
-        })
-        if (gmFound) {
-          const match = gmFound.match(/gm:\s*(.*)/i)
-          if (match) setGmName(match[1].trim())
-        }
-
-        // WAIVERS
-        const extractedWaivers = {}
-        const waiverRow = rows.find(r =>
-          r.some(cell => typeof cell === "string" && cell.trim().toLowerCase() === "waiver")
-        )
-
-        if (waiverRow) {
-          const waiverIndex = waiverRow.findIndex(
-            cell => typeof cell === "string" && cell.trim().toLowerCase() === "waiver"
-          )
-
-          let yearOffset = 0
-          for (let i = waiverIndex + 1; i < waiverRow.length; i++) {
-            const raw = waiverRow[i]
-            if (raw && String(raw).trim() !== "") {
-              const cleaned = String(raw).replace("$", "").replace("m", "").trim()
-              const value = parseFloat(cleaned)
-              if (!isNaN(value) && yearOffset < years.length) {
-                extractedWaivers[years[yearOffset]] = value
-                yearOffset++
-              }
-            }
-            if (yearOffset >= years.length) break
-          }
-        }
-        setWaiverByYear(extractedWaivers)
-
-        // PICKS
-        const cleanCell = v => String(v ?? "").replace("\r", "").trim()
-        const isMarked = v => {
-          const s = cleanCell(v).toLowerCase()
-          return s === "x" || s === "✓" || s === "1" || s === "yes" || s === "y" || s === "true"
-        }
-
-        const parseYear = cell => {
-          const s = cleanCell(cell)
-          const m = s.match(/\b(20\d{2})\b/)
-          return m ? Number(m[1]) : null
-        }
-
-        const picksRowIndex = rows.findIndex(r =>
-          r.some(cell => typeof cell === "string" && cell.trim().toLowerCase() === "picks")
-        )
-
-        let picksColIndex = -1
-        if (picksRowIndex !== -1) {
-          picksColIndex = (rows[picksRowIndex] || []).findIndex(
-            cell => typeof cell === "string" && cell.trim().toLowerCase() === "picks"
-          )
-        }
-
-        const pickNameCol = picksColIndex >= 0 ? picksColIndex : 1
-        let yearColumnMap = {}
-
-        const candidateHeaderRows = [
-          picksRowIndex - 2,
-          picksRowIndex - 1,
-          picksRowIndex,
-          picksRowIndex + 1,
-          picksRowIndex + 2,
-          picksRowIndex + 3
-        ].filter(i => i >= 0 && i < rows.length)
-
-        for (const idx of candidateHeaderRows) {
-          const row = rows[idx] || []
-          row.forEach((cell, colIndex) => {
-            const y = parseYear(cell)
-            if (y && years.includes(y)) yearColumnMap[colIndex] = y
-          })
-          if (Object.keys(yearColumnMap).length > 0) break
-        }
-
-        const inferYearColumnsFromMarks = () => {
-          const counts = {}
-          const start = picksRowIndex + 1
-          const end = Math.min(rows.length, start + 50)
-
-          for (let r = start; r < end; r++) {
-            const row = rows[r] || []
-            row.forEach((cell, colIndex) => {
-              if (isMarked(cell)) counts[colIndex] = (counts[colIndex] || 0) + 1
-            })
-          }
-
-          const topCols = Object.entries(counts)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, years.length)
-            .map(([col]) => Number(col))
-            .sort((a, b) => a - b)
-
-          const map = {}
-          topCols.forEach((col, i) => {
-            map[col] = years[i]
-          })
-
-          return { map }
-        }
-
-        if (picksRowIndex !== -1 && Object.keys(yearColumnMap).length === 0) {
-          const inferred = inferYearColumnsFromMarks()
-          yearColumnMap = inferred.map
-        }
-
-        const grouped = {}
-        years.forEach(y => {
-          grouped[y] = { A: new Set(), B: new Set() }
-        })
-
-        const parsePickName = raw => {
-          const s = cleanCell(raw)
-          const m = s.match(/\s*-\s*([A-Za-z])\s*$/)
-          const round = m ? m[1].toUpperCase() : null
-          const team = m ? s.replace(/\s*-\s*[A-Za-z]\s*$/, "").trim() : s.trim()
-          return { team, round }
-        }
-
-        if (picksRowIndex !== -1 && Object.keys(yearColumnMap).length > 0) {
-          for (let r = picksRowIndex + 1; r < rows.length; r++) {
-            const row = rows[r] || []
-            const pickStr = cleanCell(row[pickNameCol])
-            if (!pickStr) continue
-            if (pickStr.toLowerCase() === "picks") continue
-
-            const { team, round } = parsePickName(pickStr)
-
-            Object.entries(yearColumnMap).forEach(([colIndexStr, year]) => {
-              const colIndex = Number(colIndexStr)
-              if (isMarked(row[colIndex])) {
-                if (round === "A" || round === "B") grouped[year][round].add(team)
-              }
-            })
-          }
-        }
-
-        const finalPicks = {}
-        years.forEach(y => {
-          finalPicks[y] = {
-            A: Array.from(grouped[y].A),
-            B: Array.from(grouped[y].B)
-          }
-        })
-
-        setPicksByYear(finalPicks)
-      } catch (err) {
-        // keep silent
+      out[year] = {
+        roster: roster + waiver,
+        minors,
+        waiver,
+        capSpace: CAP - (roster + waiver)
       }
     }
+    return out
+  }, [teamPlayers, waiverByYear, years])
 
-    loadTeamSheet()
-  }, [decodedTeam]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    let alive = true
-    ;(async () => {
-      try {
-        const res = await fetchHistoryTable()
-        const grid = res?.grid
-        const map = parseHistoryToSummaryMap(grid)
-        const match = pickBestTeamMatch(map, decodedTeam)
-        if (!alive) return
-        setHistorySummary(match || null)
-      } catch (e) {
-        if (!alive) return
-        setHistorySummary(null)
-      }
-    })()
-    return () => {
-      alive = false
+  const groupedPlayers = useMemo(() => {
+    const out = {}
+    for (const p of teamPlayers) {
+      const pos = p?.["Position"] || "Unknown"
+      if (!out[pos]) out[pos] = []
+      out[pos].push(p)
     }
-  }, [decodedTeam])
+    return out
+  }, [teamPlayers])
 
-  useEffect(() => {
-    let alive = true
-    ;(async () => {
-      try {
-        setTxLoading(true)
-        setTxError(null)
-        const rows = await fetchTransactionsRows()
-        if (!alive) return
-        setTxRows(rows || [])
-      } catch (e) {
-        if (!alive) return
-        setTxError(e?.message || String(e))
-        setTxRows([])
-      } finally {
-        if (!alive) return
-        setTxLoading(false)
-      }
-    })()
-    return () => {
-      alive = false
+  const groupedDataPlayers = useMemo(() => {
+    const out = {}
+    for (const p of teamPlayers) {
+      const pos = normPos(p?.["Position"]) || "Unknown"
+      if (!out[pos]) out[pos] = []
+      out[pos].push(p)
     }
-  }, [])
+    return out
+  }, [teamPlayers])
 
+  const WANT_DATA_COLS = ["Fpts", "Fpts/G", "Fpts/$", "Fpts/G/$", "Rank", "G", "Fpts/G for rank"]
+
+  const dataTabHeaders = useMemo(() => {
+    const set = new Set(headers || [])
+    const out = []
+    if (set.has("Player")) out.push("Player")
+    for (const h of WANT_DATA_COLS) if (set.has(h)) out.push(h)
+    return out
+  }, [headers])
+
+  const hasAnyDataTabCols = dataTabHeaders.length > 0
+
+  // transactions derived
   const teamTransactionsAll = useMemo(() => {
     const groups = new Map()
     for (const r of txRows) {
@@ -563,7 +402,6 @@ export default function TeamDetail() {
     }
 
     const out = []
-
     for (const [id, lines] of groups.entries()) {
       lines.sort((a, b) => (a.rowIndex ?? 0) - (b.rowIndex ?? 0))
       const head = lines[0] || {}
@@ -625,50 +463,202 @@ export default function TeamDetail() {
     return c
   }, [teamTransactionsAll])
 
-  if (loading) return <div className="p-6 text-white">Loading...</div>
-  if (error) return <div className="p-6 text-red-500">{error}</div>
+  /* ----------------------------- effects ----------------------------- */
 
-  // ============================
-  // 🔥 Salary Summary
-  // ============================
+  useEffect(() => {
+    const ac = new AbortController()
+    fetchPlayerOptions(ac.signal)
+      .then(res => setOptionsByPlayerYear(res.byPlayerYear || {}))
+      .catch(() => setOptionsByPlayerYear({}))
+    return () => ac.abort()
+  }, [])
 
-  const salarySummary = {}
+  useEffect(() => {
+    async function loadTeamSheet() {
+      const teamConfig = TEAM_SHEETS[decodedTeam]
+      if (!teamConfig) return
 
-  years.forEach(year => {
-    let roster = 0
-    let minors = 0
+      try {
+        const rows = await fetchTeamSheet(teamConfig.gid)
 
-    teamPlayers.forEach(player => {
-      const raw = player[String(year)] || ""
-      if (!raw) return
+        // GM
+        let gmFound = null
+        rows.forEach(r => {
+          r.forEach(cell => {
+            if (typeof cell === "string" && cell.toLowerCase().includes("gm:")) gmFound = cell
+          })
+        })
+        if (gmFound) {
+          const match = gmFound.match(/gm:\s*(.*)/i)
+          if (match) setGmName(match[1].trim())
+        }
 
-      const cleaned = String(raw).replace("$", "").replace("m", "").trim()
-      const salary = parseFloat(cleaned)
-      if (isNaN(salary)) return
+        // WAIVERS
+        const extractedWaivers = {}
+        const waiverRow = rows.find(r => r.some(cell => typeof cell === "string" && cell.trim().toLowerCase() === "waiver"))
 
-      if (player["Rookie / Minor / Captain"] === "M") {
-        minors += salary
-      } else {
-        roster += salary
+        if (waiverRow) {
+          const waiverIndex = waiverRow.findIndex(cell => typeof cell === "string" && cell.trim().toLowerCase() === "waiver")
+
+          let yearOffset = 0
+          for (let i = waiverIndex + 1; i < waiverRow.length; i++) {
+            const raw = waiverRow[i]
+            if (raw && String(raw).trim() !== "") {
+              const cleaned = String(raw).replace("$", "").replace("m", "").trim()
+              const value = parseFloat(cleaned)
+              if (!isNaN(value) && yearOffset < years.length) {
+                extractedWaivers[years[yearOffset]] = value
+                yearOffset++
+              }
+            }
+            if (yearOffset >= years.length) break
+          }
+        }
+        setWaiverByYear(extractedWaivers)
+
+        // PICKS
+        const cleanCell = v => String(v ?? "").replace("\r", "").trim()
+        const isMarked = v => {
+          const t = cleanCell(v).toLowerCase()
+          return t === "x" || t === "✓" || t === "1" || t === "yes" || t === "y" || t === "true"
+        }
+        const parseYear = cell => {
+          const t = cleanCell(cell)
+          const m = t.match(/\b(20\d{2})\b/)
+          return m ? Number(m[1]) : null
+        }
+
+        const picksRowIndex = rows.findIndex(r => r.some(cell => typeof cell === "string" && cell.trim().toLowerCase() === "picks"))
+        let picksColIndex = -1
+        if (picksRowIndex !== -1) {
+          picksColIndex = (rows[picksRowIndex] || []).findIndex(cell => typeof cell === "string" && cell.trim().toLowerCase() === "picks")
+        }
+
+        const pickNameCol = picksColIndex >= 0 ? picksColIndex : 1
+        let yearColumnMap = {}
+
+        const candidateHeaderRows = [picksRowIndex - 2, picksRowIndex - 1, picksRowIndex, picksRowIndex + 1, picksRowIndex + 2, picksRowIndex + 3]
+          .filter(i => i >= 0 && i < rows.length)
+
+        for (const idx of candidateHeaderRows) {
+          const row = rows[idx] || []
+          row.forEach((cell, colIndex) => {
+            const y = parseYear(cell)
+            if (y && years.includes(y)) yearColumnMap[colIndex] = y
+          })
+          if (Object.keys(yearColumnMap).length > 0) break
+        }
+
+        const inferYearColumnsFromMarks = () => {
+          const counts = {}
+          const start = picksRowIndex + 1
+          const end = Math.min(rows.length, start + 50)
+
+          for (let r = start; r < end; r++) {
+            const row = rows[r] || []
+            row.forEach((cell, colIndex) => {
+              if (isMarked(cell)) counts[colIndex] = (counts[colIndex] || 0) + 1
+            })
+          }
+
+          const topCols = Object.entries(counts)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, years.length)
+            .map(([col]) => Number(col))
+            .sort((a, b) => a - b)
+
+          const map = {}
+          topCols.forEach((col, i) => { map[col] = years[i] })
+          return { map }
+        }
+
+        if (picksRowIndex !== -1 && Object.keys(yearColumnMap).length === 0) {
+          yearColumnMap = inferYearColumnsFromMarks().map
+        }
+
+        const grouped = {}
+        years.forEach(y => { grouped[y] = { A: new Set(), B: new Set() } })
+
+        const parsePickName = raw => {
+          const t = cleanCell(raw)
+          const m = t.match(/\s*-\s*([A-Za-z])\s*$/)
+          const round = m ? m[1].toUpperCase() : null
+          const team = m ? t.replace(/\s*-\s*[A-Za-z]\s*$/, "").trim() : t.trim()
+          return { team, round }
+        }
+
+        if (picksRowIndex !== -1 && Object.keys(yearColumnMap).length > 0) {
+          for (let r = picksRowIndex + 1; r < rows.length; r++) {
+            const row = rows[r] || []
+            const pickStr = cleanCell(row[pickNameCol])
+            if (!pickStr) continue
+            if (pickStr.toLowerCase() === "picks") continue
+
+            const { team, round } = parsePickName(pickStr)
+
+            Object.entries(yearColumnMap).forEach(([colIndexStr, year]) => {
+              const colIndex = Number(colIndexStr)
+              if (isMarked(row[colIndex])) {
+                if (round === "A" || round === "B") grouped[year][round].add(team)
+              }
+            })
+          }
+        }
+
+        const finalPicks = {}
+        years.forEach(y => {
+          finalPicks[y] = { A: Array.from(grouped[y].A), B: Array.from(grouped[y].B) }
+        })
+
+        setPicksByYear(finalPicks)
+      } catch {
+        // silent
       }
-    })
-
-    const waiver = waiverByYear[year] || 0
-
-    salarySummary[year] = {
-      roster: roster + waiver,
-      minors,
-      waiver,
-      capSpace: CAP - (roster + waiver)
     }
-  })
 
-  const groupedPlayers = {}
-  teamPlayers.forEach(player => {
-    const pos = player["Position"] || "Unknown"
-    if (!groupedPlayers[pos]) groupedPlayers[pos] = []
-    groupedPlayers[pos].push(player)
-  })
+    loadTeamSheet()
+  }, [decodedTeam]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const res = await fetchHistoryTable()
+        const grid = res?.grid
+        const map = parseHistoryToSummaryMap(grid)
+        const match = pickBestTeamMatch(map, decodedTeam)
+        if (!alive) return
+        setHistorySummary(match || null)
+      } catch {
+        if (!alive) return
+        setHistorySummary(null)
+      }
+    })()
+    return () => { alive = false }
+  }, [decodedTeam])
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        setTxLoading(true)
+        setTxError(null)
+        const rows = await fetchTransactionsRows()
+        if (!alive) return
+        setTxRows(rows || [])
+      } catch (e) {
+        if (!alive) return
+        setTxError(e?.message || String(e))
+        setTxRows([])
+      } finally {
+        if (!alive) return
+        setTxLoading(false)
+      }
+    })()
+    return () => { alive = false }
+  }, [])
+
+  /* ----------------------------- sorting helpers (no hooks) ----------------------------- */
 
   const handleSort = key => {
     setSortConfig(prev => ({
@@ -677,12 +667,12 @@ export default function TeamDetail() {
     }))
   }
 
-  const sortData = players => {
+  const sortSalaryPlayers = players => {
     if (!sortConfig.key) return players
 
     return [...players].sort((a, b) => {
-      let valA = a[sortConfig.key] ?? ""
-      let valB = b[sortConfig.key] ?? ""
+      let valA = a?.[sortConfig.key] ?? ""
+      let valB = b?.[sortConfig.key] ?? ""
 
       const clean = v => {
         if (typeof v !== "string") return v
@@ -696,6 +686,41 @@ export default function TeamDetail() {
 
       if (valA < valB) return sortConfig.direction === "asc" ? -1 : 1
       if (valA > valB) return sortConfig.direction === "asc" ? 1 : -1
+      return 0
+    })
+  }
+
+  const handleDataSort = key => {
+    setDataSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === "asc" ? "desc" : "asc"
+    }))
+  }
+
+  const sortDataRows = rows => {
+    if (!dataSortConfig.key) return rows
+    const key = dataSortConfig.key
+
+    const toNum = v => {
+      if (v == null || v === "") return NaN
+      const n = Number(String(v).replace(/[^\d.-]/g, ""))
+      return Number.isFinite(n) ? n : NaN
+    }
+
+    return [...rows].sort((a, b) => {
+      const aRaw = a?.[key]
+      const bRaw = b?.[key]
+      const aNum = toNum(aRaw)
+      const bNum = toNum(bRaw)
+
+      if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) {
+        return dataSortConfig.direction === "asc" ? aNum - bNum : bNum - aNum
+      }
+
+      const aStr = s(aRaw).toLowerCase()
+      const bStr = s(bRaw).toLowerCase()
+      if (aStr < bStr) return dataSortConfig.direction === "asc" ? -1 : 1
+      if (aStr > bStr) return dataSortConfig.direction === "asc" ? 1 : -1
       return 0
     })
   }
@@ -720,8 +745,21 @@ export default function TeamDetail() {
     return 0
   }
 
-  // ✅ used to ensure only G/F/C tables render & with proper labels
-  const POS_ORDER = ["G", "F", "C"]
+  const tabBtn = isActive =>
+    `px-3 py-2 rounded-lg text-sm font-semibold border transition ${
+      isActive
+        ? "bg-orange-500/20 border-orange-400 text-orange-200"
+        : "bg-slate-900/40 border-slate-700 text-slate-300 hover:text-white hover:border-slate-500"
+    }`
+
+  const onImgError = fallback => e => {
+    e.currentTarget.onerror = null
+    e.currentTarget.src = fallback
+  }
+
+  // ✅ early returns AFTER all hooks/memos/effects
+  if (loading) return <div className="p-6 text-white">Loading...</div>
+  if (error) return <div className="p-6 text-red-500">{error}</div>
 
   return (
     <div className="min-h-screen bg-slate-900 p-4 text-white">
@@ -787,32 +825,22 @@ export default function TeamDetail() {
           <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-2">
             <div className="rounded-lg bg-slate-800/60 p-3">
               <div className="text-[11px] uppercase tracking-wide text-slate-400">Best Record</div>
-              <div className="mt-1 text-lg font-bold text-white">
-                {historySummary?.bestRecordW || "—"}
-              </div>
+              <div className="mt-1 text-lg font-bold text-white">{historySummary?.bestRecordW || "—"}</div>
             </div>
 
             <div className="rounded-lg bg-slate-800/60 p-3">
-              <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                Best Fpts/G Adj
-              </div>
-              <div className="mt-1 text-lg font-bold text-white">
-                {historySummary?.bestFptsAdjusted || "—"}
-              </div>
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">Best Fpts/G Adj</div>
+              <div className="mt-1 text-lg font-bold text-white">{historySummary?.bestFptsAdjusted || "—"}</div>
             </div>
 
             <div className="rounded-lg bg-slate-800/60 p-3">
               <div className="text-[11px] uppercase tracking-wide text-slate-400">Best Playoffs</div>
-              <div className="mt-1 text-sm font-semibold text-white">
-                {historySummary?.bestPlayoffs || "—"}
-              </div>
+              <div className="mt-1 text-sm font-semibold text-white">{historySummary?.bestPlayoffs || "—"}</div>
             </div>
 
             <div className="rounded-lg bg-slate-800/60 p-3">
               <div className="text-[11px] uppercase tracking-wide text-slate-400">Awards</div>
-              <div className="mt-1 text-sm font-semibold text-white">
-                {historySummary?.awards || "—"}
-              </div>
+              <div className="mt-1 text-sm font-semibold text-white">{historySummary?.awards || "—"}</div>
             </div>
           </div>
         </div>
@@ -829,7 +857,9 @@ export default function TeamDetail() {
               <thead>
                 <tr className="bg-slate-700 text-orange-400">
                   <th className="p-2 text-left">Year</th>
-                  <th className="p-2 text-right">Roster <br /> (incl Waivers)</th>
+                  <th className="p-2 text-right">
+                    Roster <br /> (incl Waivers)
+                  </th>
                   <th className="p-2 text-right">Minors</th>
                   <th className="p-2 text-right">Waiver</th>
                   <th className="p-2 text-right">Cap Space</th>
@@ -839,15 +869,15 @@ export default function TeamDetail() {
                 {years.map(year => (
                   <tr key={year} className="border-b border-slate-700">
                     <td className="p-2 font-semibold">{year}</td>
-                    <td className="p-2 text-right">${salarySummary[year].roster}m</td>
-                    <td className="p-2 text-right">${salarySummary[year].minors}m</td>
-                    <td className="p-2 text-right text-yellow-400">${salarySummary[year].waiver}m</td>
+                    <td className="p-2 text-right">${salarySummary[year]?.roster ?? 0}m</td>
+                    <td className="p-2 text-right">${salarySummary[year]?.minors ?? 0}m</td>
+                    <td className="p-2 text-right text-yellow-400">${salarySummary[year]?.waiver ?? 0}m</td>
                     <td
                       className={`p-2 text-right ${
-                        salarySummary[year].capSpace < 0 ? "text-red-400" : "text-green-400"
+                        (salarySummary[year]?.capSpace ?? 0) < 0 ? "text-red-400" : "text-green-400"
                       }`}
                     >
-                      ${salarySummary[year].capSpace}m
+                      ${salarySummary[year]?.capSpace ?? 0}m
                     </td>
                   </tr>
                 ))}
@@ -886,13 +916,11 @@ export default function TeamDetail() {
         <div className="bg-slate-800 p-4 rounded md:col-span-2">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-orange-400">
-              Contracts{" "}
-              (Total:{" "}
+              Contracts (Total:{" "}
               <span className={`${rosterTotal > ROSTER_TOTAL_LIMIT ? "text-red-400" : "text-slate-200"}`}>
                 {rosterTotal}
               </span>
-              <span className="text-slate-500">/{ROSTER_TOTAL_LIMIT}</span>
-              )
+              <span className="text-slate-500">/{ROSTER_TOTAL_LIMIT}</span>)
             </h2>
           </div>
 
@@ -911,10 +939,7 @@ export default function TeamDetail() {
               else if (surplus > 0) msg = `You are over the maximum — please waive/trade ${surplus} player${surplus === 1 ? "" : "s"}.`
 
               return (
-                <div
-                  key={k}
-                  className="rounded-lg bg-slate-900/60 border border-slate-700 p-3"
-                >
+                <div key={k} className="rounded-lg bg-slate-900/60 border border-slate-700 p-3">
                   <div className="text-[11px] uppercase tracking-wide text-slate-400">
                     {posLabel[k]} (Min {min} • Max {max})
                   </div>
@@ -941,99 +966,206 @@ export default function TeamDetail() {
         </div>
       </div>
 
-      {/* ================= PLAYER TABLES ================= */}
-      
+      {/* ================= TAB SWITCH ================= */}
+<div className="mb-4 flex flex-wrap gap-2">
+  <button type="button" className={tabBtn(activeTab === "salary")} onClick={() => setActiveTab("salary")}>
+    Salaries
+  </button>
+  <button type="button" className={tabBtn(activeTab === "data")} onClick={() => setActiveTab("data")}>
+    Player Data
+  </button>
+</div>
 
-      {POS_ORDER.filter(pos => groupedPlayers[pos]).map(position => {
-        const players = sortData(groupedPlayers[position])
+{/* ================= PLAYER CONTENT ================= */}
+{activeTab === "salary" ? (
+  <>
+    {/* Salary tables (match Player Data styling) */}
+    {POS_ORDER.filter(pos => groupedPlayers[pos]).map(position => {
+      const players = sortSalaryPlayers(groupedPlayers[position])
+      const count = players.length
 
-        return (
-          <div key={position} className="mb-8">
-            {/* ✅ Show full names instead of letters */}
-            <h2 className="text-xl font-semibold mb-3">{posLabel[position]}</h2>
+      return (
+        <div key={position} className="mb-8">
+          <h2 className="text-xl font-semibold mb-3">
+            {posLabel[position]} <span className="text-slate-400 text-sm font-medium">({count} players)</span>
+          </h2>
 
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="bg-slate-700 text-orange-400">
-                    <th onClick={() => handleSort("Player")} className="p-2 cursor-pointer">
-                      Player
-                    </th>
+          <div className="rounded-xl border border-slate-700 bg-slate-900/40 p-3 overflow-x-auto">
+            <table className="min-w-full border-collapse text-sm table-auto">
+              <thead>
+                <tr className="bg-slate-700 text-orange-400">
+                  <th
+                    onClick={() => handleSort("Player")}
+                    className="p-2 cursor-pointer text-left whitespace-nowrap min-w-[220px]"
+                    title="Click to sort"
+                  >
+                    Player
+                  </th>
+
                     <th
                       onClick={() => handleSort("Rookie / Minor / Captain")}
-                      className="p-2 cursor-pointer text-center"
+                      className="p-2 cursor-pointer text-center whitespace-nowrap w-[1%] min-w-[44px]"
+                      title="Click to sort"
                     >
                       Type
                     </th>
-                    {years.map(y => (
+
+                  {years.map(y => (
+                  <th
+                    key={y}
+                    onClick={() => handleSort(String(y))}
+                    className="p-2 text-right cursor-pointer whitespace-nowrap min-w-[96px]"
+                    title="Click to sort"
+                  >
+                    {y}
+                  </th>
+                  ))}
+                </tr>
+              </thead>
+
+              <tbody>
+                {players.map((player, index) => (
+                  <tr key={index} className="border-b border-slate-700 hover:bg-slate-800">
+                    <td className="p-2 font-semibold text-slate-100 whitespace-nowrap">
+                      {player["Player"]}
+                    </td>
+
+                    <td className="p-2 text-center whitespace-nowrap w-[1%]">
+                      <TypeBadgeSmall t={player["Rookie / Minor / Captain"]} />
+                    </td>
+
+                    {years.map(y => {
+                      const yearStr = String(y)
+                      const salary = player?.[yearStr] || "-"
+                      const playerName = player?.Player || player?.Name || player?.__col_0 || ""
+                      const tp = getOptionForPlayerYear(optionsByPlayerYear, playerName, yearStr)
+
+                      return (
+                        <td key={y} className="p-2 whitespace-nowrap">
+                          <div className="flex justify-end items-center gap-1">
+                            {salary !== "-" && <OptionBadge tp={tp} />}
+                            <span className="tabular-nums leading-none">{salary}</span>
+                          </div>
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )
+    })}
+
+    {/* Badge disclaimer */}
+    <div className="mb-4 rounded-xl border border-slate-700 bg-slate-900/40 p-3">
+      <div className="text-sm text-slate-200 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-emerald-500/10 text-emerald-200 border-emerald-500/30">
+            TO
+          </span>
+          <span className="text-slate-300">= Team Option</span>
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-sky-500/10 text-sky-200 border-sky-500/30">
+            PO
+          </span>
+          <span className="text-slate-300">= Player Option</span>
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-violet-600 text-white">
+            C
+          </span>
+          <span className="text-slate-300">= Captain</span>
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-emerald-500/10 text-emerald-200 border-emerald-500/30">
+            R
+          </span>
+          <span className="text-slate-300">= Rookie</span>
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-emerald-500/10 text-emerald-200 border-emerald-500/30">
+            M
+          </span>
+          <span className="text-slate-300">= Minor</span>
+        </span>
+      </div>
+    </div>
+  </>
+) : (
+  <>
+    {/* Player Data tables grouped + sortable */}
+    {POS_ORDER.filter(pos => groupedDataPlayers[pos]?.length).map(pos => {
+      const rows = sortDataRows(groupedDataPlayers[pos])
+      const count = rows.length
+
+      return (
+        <div key={pos} className="mb-8">
+          <h2 className="text-xl font-semibold mb-3">
+            {posLabel[pos]} <span className="text-slate-400 text-sm font-medium">({count} players)</span>
+          </h2>
+
+          <div className="rounded-xl border border-slate-700 bg-slate-900/40 p-3 overflow-x-auto">
+            {!hasAnyDataTabCols ? (
+              <div className="p-3 text-slate-300">
+                No matching Player Data columns found in the current LeagueContext table.
+              </div>
+            ) : (
+              <table className="min-w-full border-collapse text-sm table-auto">
+                <thead>
+                  <tr className="bg-slate-700 text-orange-400">
+                    {dataTabHeaders.map(h => (
                       <th
-                        key={y}
-                        onClick={() => handleSort(String(y))}
-                        className="p-2 text-right cursor-pointer"
+                        key={h}
+                        onClick={() => handleDataSort(h)}
+                        className={[
+                          "p-2 text-left whitespace-nowrap cursor-pointer select-none",
+                          h === "Player" ? "w-max" : ""
+                        ].join(" ")}
+                        title="Click to sort"
                       >
-                        {y}
+                        <span className="inline-flex items-center gap-2">
+                          {displayMap?.[h] || h}
+                          {dataSortConfig.key === h ? (
+                            <span className="text-[11px] text-orange-200">
+                              {dataSortConfig.direction === "asc" ? "▲" : "▼"}
+                            </span>
+                          ) : null}
+                        </span>
                       </th>
                     ))}
                   </tr>
                 </thead>
 
                 <tbody>
-                  {players.map((player, index) => (
-                    <tr
-                      key={index}
-                      className="border-b border-slate-700 hover:bg-slate-800"
-                    >
-                      {/* slightly tighter row */}
-                      <td className="p-2 font-semibold">{player["Player"]}</td>
-                      <td className="p-2 text-center">
-                        <TypeBadge t={player["Rookie / Minor / Captain"]} />
-                      </td>
-
-                      {years.map(y => {
-                        const yearStr = String(y)
-                        const salary = player[yearStr] || "-"
-                        const playerName = player.Player || player.Name || player.__col_0 || ""
-                        const tp = getOptionForPlayerYear(optionsByPlayerYear, playerName, yearStr)
-
-                        return (
-                          // ✅ more compact salary cells
-                          <td key={y} className="p-1.5">
-                            <div className="flex justify-end items-center gap-2 whitespace-nowrap">
-                              {salary !== "-" && <OptionBadge tp={tp} />}
-                              <span className="text-right tabular-nums leading-none">
-                                {salary}
-                              </span>
-                            </div>
-                          </td>
-                        )
-                      })}
+                  {rows.map((row, idx) => (
+                    <tr key={idx} className="border-b border-slate-700 hover:bg-slate-800">
+                      {dataTabHeaders.map(h => (
+                        <td
+                          key={h}
+                          className={[
+                            "p-2 whitespace-nowrap",
+                            h === "Player" ? "min-w-[220px] font-semibold text-slate-100" : "min-w-[90px]"
+                          ].join(" ")}
+                        >
+                          {row?.[h] ?? "—"}
+                        </td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            )}
           </div>
-        )
-      })}
-      {/* ✅ Badge disclaimer */}
-      <div className="mb-4 rounded-xl border border-slate-700 bg-slate-900/40 p-3">
-        <div className="text-sm text-slate-200 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span className="inline-flex items-center gap-2">
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-emerald-500/10 text-emerald-200 border-emerald-500/30">
-              TO
-            </span>
-            <span className="text-slate-300">= Team Option</span>
-          </span>
-          <span className="inline-flex items-center gap-2">
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-sky-500/10 text-sky-200 border-sky-500/30">
-              PO
-            </span>
-            <span className="text-slate-300">= Player Option</span>
-          </span>
         </div>
-      </div>
+      )
+    })}
+  </>
+)}
 
-      {/* ================= TRANSACTION HISTORY (TEAM) BELOW PLAYERS ================= */}
+      {/* ================= TRANSACTION HISTORY ================= */}
       <div className="mb-10 bg-slate-800 p-4 rounded">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -1067,10 +1199,7 @@ export default function TeamDetail() {
         ) : (
           <div className="mt-4 space-y-3">
             {teamTransactions.map(tx => (
-              <details
-                key={tx.txId}
-                className="bg-slate-900/60 border border-slate-700 rounded-xl p-4"
-              >
+              <details key={tx.txId} className="bg-slate-900/60 border border-slate-700 rounded-xl p-4">
                 <summary className="cursor-pointer list-none">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div className="font-semibold text-slate-100">
@@ -1084,14 +1213,12 @@ export default function TeamDetail() {
                   </div>
 
                   <div className="mt-2 text-sm text-slate-200">
-                    <span className="text-slate-400">Sent:</span>{" "}
-                    {tx.sent.length ? tx.sent.join(", ") : "-"}
+                    <span className="text-slate-400">Sent:</span> {tx.sent.length ? tx.sent.join(", ") : "-"}
                   </div>
 
                   {isTrade(tx.type) ? (
                     <div className="mt-1 text-sm text-slate-200">
-                      <span className="text-slate-400">Received:</span>{" "}
-                      {tx.received.length ? tx.received.join(", ") : "-"}
+                      <span className="text-slate-400">Received:</span> {tx.received.length ? tx.received.join(", ") : "-"}
                     </div>
                   ) : null}
 
