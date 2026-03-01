@@ -1,3 +1,4 @@
+// utils/fetchOverview.js
 export async function fetchOverviewMapping() {
   const SHEET_ID = "146QdGaaB1Nt0HJXG_s8O0s5N0lQDfnWGmGsgNHEnCkQ"
   const OVERVIEW_GID = "285981266"
@@ -7,40 +8,37 @@ export async function fetchOverviewMapping() {
   const res = await fetch(url)
   const text = await res.text()
 
-  // Remove wrapper safely
   const jsonString = text.match(/google\.visualization\.Query\.setResponse\((.*)\);?/s)?.[1]
-
-  if (!jsonString) {
-    throw new Error("Failed to parse Overview sheet response")
-  }
+  if (!jsonString) throw new Error("Failed to parse Overview sheet response")
 
   const json = JSON.parse(jsonString)
-
   const rows = json.table.rows
+
   const mapping = {}
 
   rows.forEach(row => {
     const sheetCell = row.c[0]
     const teamCell = row.c[1]
 
+    const gmCell = row.c[28]          // GM (col 28)
+    const draftCell = row.c[29]       // ✅ Team Draft Code (col 29)
+
     if (!sheetCell || !teamCell) return
 
     const sheetName = sheetCell.v
     const teamName = teamCell.v
 
-    let gid = null
+    const gmName = String(gmCell?.v ?? gmCell?.f ?? "").trim()
+    const draftCode = String(draftCell?.v ?? draftCell?.f ?? "").trim()  // ✅ NEW
 
-    // Extract gid from formatted hyperlink
+    let gid = null
     if (sheetCell.f) {
       const match = sheetCell.f.match(/gid=(\d+)/)
       if (match) gid = match[1]
     }
 
-    if (sheetName && teamName && gid) {
-      mapping[teamName] = {
-        sheetName,
-        gid
-      }
+    if (sheetName && teamName) {
+      mapping[teamName] = { sheetName, gid, gmName, draftCode } // ✅ NEW
     }
   })
 

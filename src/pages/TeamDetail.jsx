@@ -7,11 +7,20 @@ import { TEAM_SHEETS } from "../config/teamSheets"
 import { fetchHistoryTable } from "../utils/fetchHistory"
 import { fetchTransactionsRows } from "../utils/fetchTransactions"
 import { fetchPlayerOptions, getOptionForPlayerYear, optionLabel } from "../utils/fetchPlayerOptions"
+import { fetchOverviewMapping } from "../utils/fetchOverview"
 
 /* ----------------------------- helpers (History summary) ----------------------------- */
 
 function s(x) {
   return String(x ?? "").replace(/\r/g, "").trim()
+}
+
+function getOverviewEntry(map, teamName) {
+  const want = normTeam(teamName)
+  for (const [k, v] of Object.entries(map || {})) {
+    if (normTeam(k) === want) return { key: k, ...(v || {}) }
+  }
+  return null
 }
 
 function norm(x) {
@@ -473,6 +482,41 @@ export default function TeamDetail() {
     return () => ac.abort()
   }, [])
 
+
+  useEffect(() => {
+  let alive = true
+
+  const getOverviewEntry = (map, teamName) => {
+    const want = normTeam(teamName)
+    for (const [k, v] of Object.entries(map || {})) {
+      if (normTeam(k) === want) return { key: k, ...(v || {}) }
+    }
+    return null
+  }
+
+  ;(async () => {
+    try {
+      const map = await fetchOverviewMapping()
+      if (!alive) return
+
+      const entry = getOverviewEntry(map, decodedTeam)
+      const gm = entry?.gmName || ""
+
+      setGmName(gm)
+      // later if you need it:
+      // setDraftCode(entry?.draftCode || "")
+    } catch (e) {
+      if (!alive) return
+      setGmName("")
+    }
+  })()
+
+  return () => {
+    alive = false
+  }
+}, [decodedTeam])
+
+
   useEffect(() => {
     async function loadTeamSheet() {
       const teamConfig = TEAM_SHEETS[decodedTeam]
@@ -480,18 +524,8 @@ export default function TeamDetail() {
 
       try {
         const rows = await fetchTeamSheet(teamConfig.gid)
+        
 
-        // GM
-        let gmFound = null
-        rows.forEach(r => {
-          r.forEach(cell => {
-            if (typeof cell === "string" && cell.toLowerCase().includes("gm:")) gmFound = cell
-          })
-        })
-        if (gmFound) {
-          const match = gmFound.match(/gm:\s*(.*)/i)
-          if (match) setGmName(match[1].trim())
-        }
 
         // WAIVERS
         const extractedWaivers = {}
@@ -617,7 +651,9 @@ export default function TeamDetail() {
     }
 
     loadTeamSheet()
+
   }, [decodedTeam]) // eslint-disable-line react-hooks/exhaustive-deps
+  
 
   useEffect(() => {
     let alive = true
