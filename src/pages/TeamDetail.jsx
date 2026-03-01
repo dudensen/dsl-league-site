@@ -15,6 +15,10 @@ function s(x) {
   return String(x ?? "").replace(/\r/g, "").trim()
 }
 
+function playerHref(playerName) {
+  return `/player/${encodeURIComponent(s(playerName))}`
+}
+
 function isExcludedType(v) {
   const t = s(v).toUpperCase()
   return t === "M" || t === "IRE"
@@ -1070,8 +1074,14 @@ export default function TeamDetail() {
               <tbody>
                 {players.map((player, index) => (
                   <tr key={index} className="border-b border-slate-700 hover:bg-slate-800">
-                    <td className="p-2 font-semibold text-slate-100 whitespace-nowrap">
-                      {player["Player"]}
+                    <td className="p-2 font-semibold whitespace-nowrap">
+                      <Link
+                        to={playerHref(player["Player"])}
+                        className="text-slate-100 hover:text-orange-400 hover:underline"
+                        title="Open player details"
+                      >
+                        {player["Player"]}
+                      </Link>
                     </td>
 
                     <td className="p-2 text-center whitespace-nowrap w-[1%]">
@@ -1200,7 +1210,17 @@ export default function TeamDetail() {
                             h === "Player" ? "min-w-[220px] font-semibold text-slate-100" : "min-w-[90px]"
                           ].join(" ")}
                         >
-                          {row?.[h] ?? "—"}
+                          {h === "Player" ? (
+                          <Link
+                            to={`/player/${encodeURIComponent(s(row?.[h]))}`}
+                            className="text-slate-100 hover:text-orange-400 hover:underline"
+                            title="Open player details"
+                          >
+                            {row?.[h] ?? "—"}
+                          </Link>
+                        ) : (
+                          row?.[h] ?? "—"
+                        )}
                         </td>
                       ))}
                     </tr>
