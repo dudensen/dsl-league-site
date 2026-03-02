@@ -19,9 +19,18 @@ function playerHref(playerName) {
   return `/player/${encodeURIComponent(s(playerName))}`
 }
 
+function typeTokens(v) {
+  // supports: "R - INJ", "C-INJ", "R/INJ", "R, INJ", "R INJ", etc.
+  return s(v)
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/g)
+    .map(x => x.trim())
+    .filter(Boolean)
+}
+
 function isExcludedType(v) {
-  const t = s(v).toUpperCase()
-  return t === "M" || t === "IRE"
+  const toks = typeTokens(v)
+  return toks.includes("M") || toks.includes("IRE")
 }
 
 function getOverviewEntry(map, teamName) {
@@ -256,32 +265,56 @@ function OptionBadge({ tp }) {
 }
 
 function TypeBadgeSmall({ t }) {
-  const v = s(t).toUpperCase()
-  if (!v || v === "-") return <span className="text-slate-500">-</span>
-
-  const map = {
-    R: { label: "R", title: "Rookie", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
-    M: { label: "M", title: "Minor", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
-    C: { label: "C", title: "Captain", cls: "bg-violet-600 text-white border-emerald-500/30" },
-    IRE: { label: "IRE", title: "Injured Reserve Exception", cls: "bg-red-500/15 text-white border-red-500/40" }
+  const toks = typeTokens(t)
+  if (!toks.length || (toks.length === 1 && toks[0] === "-")) {
+    return <span className="text-slate-500">-</span>
   }
 
-  const conf = map[v]
-  if (!conf) return <span className="text-slate-300 text-xs">{v}</span>
+  const map = {
+    R:   { label: "R",   title: "Rookie", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
+    M:   { label: "M",   title: "Minor", cls: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30" },
+    C:   { label: "C",   title: "Captain", cls: "bg-violet-600 text-white border-violet-400/40" },
+    IRE: { label: "IRE", title: "Injury Exception", cls: "bg-red-500/15 text-white border-red-500/40" },
+    INJ: { label: "INJ", title: "Injured", cls: "bg-rose-500 text-white border-rose-300/60" }
+  }
+
+  const renderOne = (tok, i) => {
+    const conf = map[tok]
+    if (!conf) {
+      return (
+        <span key={`${tok}-${i}`} className="text-slate-300 text-xs">
+          {tok}
+        </span>
+      )
+    }
+
+    const isWide = conf.label.length > 1 // INJ, IRE
+    return (
+      <span
+        key={`${tok}-${i}`}
+        className={[
+          "inline-flex items-center justify-center rounded-full text-[10px] font-bold border",
+          isWide ? "h-5 px-2" : "w-7 h-5",
+          conf.cls
+        ].join(" ")}
+        title={conf.title}
+      >
+        {conf.label}
+      </span>
+    )
+  }
 
   return (
-    <span
-      className={[
-        "inline-flex items-center justify-center w-7 h-5 rounded-full text-[10px] font-bold border",
-        conf.cls
-      ].join(" ")}
-      title={conf.title}
-    >
-      {conf.label}
+    <span className="inline-flex items-center gap-1">
+      {toks.map((tok, i) => (
+        <span key={`${tok}-${i}`} className="inline-flex items-center gap-1">
+          {renderOne(tok, i)}
+          {i < toks.length - 1 ? <span className="text-slate-500 text-[11px]">-</span> : null}
+        </span>
+      ))}
     </span>
   )
 }
-
 /* ----------------------------- component ----------------------------- */
 
 export default function TeamDetail() {
@@ -334,17 +367,28 @@ export default function TeamDetail() {
   const POS_ORDER = ["G", "F", "C"]
 
   const contractsByPos = useMemo(() => {
-    const out = { G: { roster: 0, minors: 0 }, F: { roster: 0, minors: 0 }, C: { roster: 0, minors: 0 } }
-    for (const p of teamPlayers) {
-      const pos = normPos(p?.["Position"])
-      if (!pos) continue
-      const t = p?.["Rookie / Minor / Captain"]
-      const excluded = isExcludedType(t)
-      if (excluded) out[pos].minors += 1
-      else out[pos].roster += 1
-    }
-    return out
-  }, [teamPlayers])
+  const out = {
+    G: { roster: 0, minors: 0, ire: 0 },
+    F: { roster: 0, minors: 0, ire: 0 },
+    C: { roster: 0, minors: 0, ire: 0 }
+  }
+
+  for (const p of teamPlayers) {
+    const pos = normPos(p?.["Position"])
+    if (!pos) continue
+
+    const toks = typeTokens(p?.["Rookie / Minor / Captain"])
+
+    const isM = toks.includes("M")
+    const isIRE = toks.includes("IRE")
+
+    if (isM) out[pos].minors += 1
+    else if (isIRE) out[pos].ire += 1
+    else out[pos].roster += 1
+  }
+
+  return out
+}, [teamPlayers])
 
   const rosterTotal = useMemo(() => {
     return (contractsByPos.G?.roster || 0) + (contractsByPos.F?.roster || 0) + (contractsByPos.C?.roster || 0)
@@ -1004,9 +1048,20 @@ export default function TeamDetail() {
                     <div className="mt-2 text-xs text-green-300">Within limits</div>
                   )}
 
-                  <div className="mt-1 text-xs text-slate-300">
+                  <div className="mt-1 text-xs text-slate-300 flex flex-wrap gap-x-3 gap-y-1">
+                  <span>
                     Minors: <span className="text-slate-100 font-semibold">{minors}</span>
-                  </div>
+                  </span>
+
+                  {(() => {
+                    const ire = contractsByPos[k]?.ire || 0
+                    return ire > 0 ? (
+                      <span>
+                        Injury Exceptions: <span className="text-slate-100 font-semibold">{ire}</span>
+                      </span>
+                    ) : null
+                  })()}
+                </div>
                 </div>
               )
             })}
@@ -1144,6 +1199,12 @@ export default function TeamDetail() {
             M
           </span>
           <span className="text-slate-300">= Minor</span>
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-rose-500 text-white border-rose-300/60">
+            INJ
+          </span>
+          <span className="text-slate-300">= Injured</span>
         </span>
         <span className="inline-flex items-center gap-2">
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-red-500/15 text-white border-red-500/40">
