@@ -583,9 +583,7 @@ export default function PlayerDetail() {
       <div className="text-sm text-slate-400 mb-6">
         {mainRow["Position"] ? `Position: ${mainRow["Position"]}` : null}
         {mainRow["Current Owner"] ? ` • Owner: ${mainRow["Current Owner"]}` : null}
-        {` • Wage Value (if renewed this offseason): ${
-          wageRenewalValue == null ? "-" : `$${wageRenewalValue}m`
-        }`}
+      
       </div>
 
       {/* ===== Career Arc Summary ===== */}
@@ -758,17 +756,26 @@ export default function PlayerDetail() {
 
       {/* ===== THIRD: Salary (full width below) ===== */}
       <div className="mt-6 bg-slate-800 p-4 rounded">
-        <h2 className="text-lg font-semibold text-orange-400 mb-3 flex items-center justify-between gap-4">
-          <span>Salary Trend ({startYear} → {currentYear})</span>
+        <h2 className="text-lg font-semibold text-orange-400 mb-3 flex items-start justify-between gap-4">
+  <span>Salary Trend ({startYear} → {currentYear})</span>
 
-          <span className="text-sm font-semibold text-slate-200">
-            Wage (next season):{" "}
-            <span className="text-orange-300">
-              {wageNextSeason == null ? "-" : `$${wageNextSeason}m`}
-            </span>
-            <span className="ml-2 text-xs text-slate-400">({nextSeasonYear})</span>
-          </span>
-        </h2>
+  <div className="text-sm font-semibold text-slate-200 text-right">
+    <div>
+      Wage (next season):{" "}
+      <span className="text-orange-300">
+        {wageNextSeason == null ? "-" : `$${wageNextSeason}m`}
+      </span>
+      <span className="ml-2 text-xs text-slate-400">({nextSeasonYear})</span>
+    </div>
+
+    <div className="mt-1 text-slate-300">
+      Wage Value (if renewed this offseason):{" "}
+      <span className="text-orange-300">
+        {wageRenewalValue == null ? "-" : `$${wageRenewalValue}m`}
+      </span>
+    </div>
+  </div>
+</h2>
 
         <div className="h-72">
           <ResponsiveContainer width="100%" height="100%">
