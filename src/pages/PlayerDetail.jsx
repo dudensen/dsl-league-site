@@ -142,10 +142,17 @@ export default function PlayerDetail() {
   )
 
   const nextSeasonYear = currentYear + 1
+
   const wageNextSeason = useMemo(() => {
     if (!mainRow) return null
     return toSalaryOrNull(mainRow[String(nextSeasonYear)])
   }, [mainRow, nextSeasonYear])
+
+  // ✅ NEW: exact column from Players Master List
+  const wageRenewalValue = useMemo(() => {
+    if (!mainRow) return null
+    return toSalaryOrNull(mainRow["Wage (next season)"])
+  }, [mainRow])
 
   // ----- Trend builders -----
   const getRankTrend = row => {
@@ -413,7 +420,6 @@ export default function PlayerDetail() {
     </div>
   )
 
-  // main rank dot with YoY badge (always left)
   const RankMainDot = props => {
     const { cx, cy, payload } = props
     if (cx == null || cy == null) return null
@@ -490,7 +496,6 @@ export default function PlayerDetail() {
     </>
   )
 
-  // ✅ grouped transactions: 1 card per transaction block (Date starts block)
   const playerTransactions = useMemo(() => {
     const target = normFuzzy(decodedPlayer)
 
@@ -504,7 +509,6 @@ export default function PlayerDetail() {
     const out = []
 
     for (const [id, lines] of groups.entries()) {
-      // include if player appears on ANY line of the transaction
       const involves = lines.some(l => {
         const a = normFuzzy(l.assetA)
         const b = normFuzzy(l.assetB)
@@ -579,6 +583,9 @@ export default function PlayerDetail() {
       <div className="text-sm text-slate-400 mb-6">
         {mainRow["Position"] ? `Position: ${mainRow["Position"]}` : null}
         {mainRow["Current Owner"] ? ` • Owner: ${mainRow["Current Owner"]}` : null}
+        {` • Wage Value (if renewed this offseason): ${
+          wageRenewalValue == null ? "-" : `$${wageRenewalValue}m`
+        }`}
       </div>
 
       {/* ===== Career Arc Summary ===== */}
@@ -788,7 +795,7 @@ export default function PlayerDetail() {
         </div>
       </div>
 
-      {/* ===== Transactions (1 card per transaction, expandable) ===== */}
+      {/* ===== Transactions ===== */}
       <div className="mt-6 bg-slate-800 p-4 rounded">
         <div className="flex items-baseline justify-between gap-4">
           <h2 className="text-lg font-semibold text-orange-400">
@@ -815,8 +822,7 @@ export default function PlayerDetail() {
                 <summary className="cursor-pointer list-none">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div className="font-semibold text-slate-100">
-                      {tx.date} •{" "}
-                      <span className="text-orange-300">{tx.type}</span>
+                      {tx.date} • <span className="text-orange-300">{tx.type}</span>
                     </div>
                     <div className="text-sm text-slate-300">
                       {tx.teamA || "-"}{" "}
@@ -857,24 +863,12 @@ export default function PlayerDetail() {
                     <tbody>
                       {tx.lines.map((l, i) => (
                         <tr key={i} className="border-t border-slate-700">
-                          <td className="py-2 pr-4 text-slate-200">
-                            {l.teamA || "-"}
-                          </td>
-                          <td className="py-2 pr-4 text-slate-200">
-                            {l.assetA || "-"}
-                          </td>
-                          <td className="py-2 pr-4 text-slate-200">
-                            {l.salaryA || "-"}
-                          </td>
-                          <td className="py-2 pr-4 text-slate-200">
-                            {l.teamB || "-"}
-                          </td>
-                          <td className="py-2 pr-4 text-slate-200">
-                            {l.assetB || "-"}
-                          </td>
-                          <td className="py-2 pr-4 text-slate-200">
-                            {l.salaryB || "-"}
-                          </td>
+                          <td className="py-2 pr-4 text-slate-200">{l.teamA || "-"}</td>
+                          <td className="py-2 pr-4 text-slate-200">{l.assetA || "-"}</td>
+                          <td className="py-2 pr-4 text-slate-200">{l.salaryA || "-"}</td>
+                          <td className="py-2 pr-4 text-slate-200">{l.teamB || "-"}</td>
+                          <td className="py-2 pr-4 text-slate-200">{l.assetB || "-"}</td>
+                          <td className="py-2 pr-4 text-slate-200">{l.salaryB || "-"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -886,7 +880,6 @@ export default function PlayerDetail() {
         )}
       </div>
 
-      {/* ✅ datalist needed for autocomplete suggestions */}
       <datalist id="players-list">
         {allPlayerNames.map(n => (
           <option key={n} value={n} />
