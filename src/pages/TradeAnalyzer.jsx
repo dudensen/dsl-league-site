@@ -1,6 +1,9 @@
 // src/pages/TradeAnalyzer.jsx
 import React, { useMemo, useRef, useState, useEffect } from "react";
 import { useLeague } from "../context/LeagueContext";
+import { fetchTeamSheet } from "../utils/fetchTeamSheet";
+import { TEAM_SHEETS } from "../config/teamSheets";
+import { buildTeamSalarySummary, parseWaiversFromTeamSheetRows } from "../data/teamSalarySummary";
 
 /* ----------------------------- utils ----------------------------- */
 
@@ -48,16 +51,11 @@ function statPillClass(v) {
  * then store values under p.extras.<field>.
  */
 const EXTRA_FIELDS = {
-  // show as text
   age: { header: ["Age Next offseason"], type: "text" },
   position: { header: ["Position"], type: "text" },
-
-  // parse as number
   games: { header: ["G"], type: "number" },
-
-  // salary-like parsing (ONLY if you want to use an explicit "Current Salary" column)
-  // NOTE: your "salaryNow" for display is taken from the currentSeason year column, not this.
   salaryNow: { header: ["Current Salary", "Salary"], type: "money" },
+  type: { header: ["Rookie / Minor / Captain"], type: "text" },
 };
 
 function pickHeaderKey(headers, wanted) {
@@ -370,6 +368,7 @@ function DarkDropdown({ value, options, placeholder = "Select team...", onChange
 
 export default function TradeAnalyzerPage() {
   const { table, loading, error } = useLeague();
+  const CAP = 200;
 
   const [loadError, setLoadError] = useState("");
 
@@ -385,9 +384,8 @@ export default function TradeAnalyzerPage() {
   const [playerQuery, setPlayerQuery] = useState("");
 
   const [result, setResult] = useState(null);
+  const [waiverByTeamYear, setWaiverByTeamYear] = useState({});
 
-  // OPTIONAL: cap space reference (populate this from TeamDetails/LeagueContext when you’re ready)
-  const capSpaceByTeam = table?.capSpaceByTeam || {};
 
   useEffect(() => {
     try {
@@ -419,6 +417,7 @@ export default function TradeAnalyzerPage() {
     }
   }, [table, error]);
 
+
   const teamOptions = useMemo(() => {
     const teams = Array.from(new Set(players.map((p) => (p.teamId || "").trim()).filter(Boolean)));
     teams.sort((a, b) => a.localeCompare(b));
@@ -426,6 +425,44 @@ export default function TradeAnalyzerPage() {
   }, [players]);
 
   const selectedTeams = useMemo(() => Object.keys(tradeMap), [tradeMap]);
+
+  useEffect(() => {
+  let alive = true;
+
+  async function loadWaiversForSelectedTeams() {
+    const yearsForWaivers = allSalaryYears.length ? allSalaryYears : yearsSelected;
+
+    const teamsToLoad = selectedTeams.filter(team => TEAM_SHEETS[team]);
+
+    if (!teamsToLoad.length) return;
+
+    try {
+      const entries = await Promise.all(
+        teamsToLoad.map(async team => {
+          const cfg = TEAM_SHEETS[team];
+          const rows = await fetchTeamSheet(cfg.gid);
+          const waivers = parseWaiversFromTeamSheetRows(rows, yearsForWaivers);
+          return [team, waivers];
+        })
+      );
+
+      if (!alive) return;
+
+      setWaiverByTeamYear(prev => ({
+        ...prev,
+        ...Object.fromEntries(entries),
+      }));
+    } catch {
+      // keep silent, like TeamDetail
+    }
+  }
+
+  loadWaiversForSelectedTeams();
+
+  return () => {
+    alive = false;
+  };
+}, [selectedTeams, allSalaryYears, yearsSelected]);
 
   // IMPORTANT: now we keep owner label with each player option
   const availablePlayers = useMemo(() => {
@@ -460,6 +497,7 @@ export default function TradeAnalyzerPage() {
     for (const p of players) m.set(normFuzzy(p.name), p);
     return m;
   }, [players]);
+
 
   function ensureTeam(teamId) {
     const t = String(teamId || "").trim();
@@ -500,6 +538,23 @@ export default function TradeAnalyzerPage() {
     });
     setActiveTeam((t) => (t === teamId ? "" : t));
   }
+
+  const teamSalarySummaryByTeam = useMemo(() => {
+  const out = {};
+
+  for (const team of selectedTeams) {
+    const teamPlayers = players.filter(p => p.teamId === team);
+
+    out[team] = buildTeamSalarySummary({
+      teamPlayers,
+      years: yearsSelected,
+      waiverByYear: waiverByTeamYear?.[team] || {},
+      cap: CAP,
+    });
+  }
+
+  return out;
+}, [players, selectedTeams, yearsSelected, waiverByTeamYear, CAP]);
 
   function runAnalysis() {
     const out = buildTradeResult({
@@ -616,13 +671,14 @@ export default function TradeAnalyzerPage() {
               <div className="text-sm text-slate-400">Add a team, then add received players.</div>
             )}
 
-            {Object.keys(tradeMap)
-              .sort((a, b) => a.localeCompare(b))
-              .map((t) => {
-                const cap = capSpaceByTeam?.[t];
-                const capNum = typeof cap === "number" ? cap : cap != null ? parseNumber(cap) : null;
+           {Object.keys(tradeMap)
+            .sort((a, b) => a.localeCompare(b))
+            .map((t) => {
+              const currentYearKey = String(currentSeason);
+              const summary = teamSalarySummaryByTeam?.[t]?.[currentYearKey];
+              const capNum = summary?.capSpace;
 
-                return (
+              return (
                   <div
                     key={t}
                     className={[
@@ -667,12 +723,7 @@ export default function TradeAnalyzerPage() {
               })}
           </div>
 
-          {Object.keys(tradeMap).length > 0 && Object.keys(capSpaceByTeam || {}).length === 0 && (
-            <div className="mt-3 text-[11px] text-slate-500">
-              (Cap Space reference will appear here once you expose{" "}
-              <span className="font-semibold">table.capSpaceByTeam</span>.)
-            </div>
-          )}
+        
         </div>
 
         {/* Receives */}
@@ -843,7 +894,7 @@ export default function TradeAnalyzerPage() {
             <div className="rounded-2xl border border-slate-800/70 bg-slate-950/20 p-4">
               <div className="font-semibold">Salary Impact</div>
               <div className="text-xs text-slate-400 mt-1">
-                Per team, per year: (incoming salaries − outgoing salaries). Green = positive, Red = negative.
+                Per team, per year: trade salary impact, payroll after trade, and available cap space after trade.
               </div>
 
               <div className="mt-3 overflow-x-auto">
@@ -862,13 +913,37 @@ export default function TradeAnalyzerPage() {
                     {result.teams.map((t) => (
                       <tr key={t.teamId} className="border-b border-slate-800/50 last:border-b-0">
                         <td className="py-2 pr-3 font-semibold">{t.teamId}</td>
+
                         {yearsSelected.map((y) => {
-                          const v = t.salaryImpactByYear[y] ?? 0;
-                          const cls = v > 0 ? "text-emerald-300" : v < 0 ? "text-red-300" : "text-slate-300";
+                          const impact = t.salaryImpactByYear[y] ?? 0;
+
+                          const currentSummary = teamSalarySummaryByTeam?.[t.teamId]?.[String(y)];
+                          const currentPayroll = currentSummary?.roster ?? 0;
+
+                          const newPayroll = currentPayroll + impact;
+                          const capSpaceAfter = CAP - newPayroll;
+
+                          const impactCls =
+                            impact > 0 ? "text-red-300" : impact < 0 ? "text-emerald-300" : "text-slate-300";
+
+                          const capCls =
+                            capSpaceAfter < 0 ? "text-red-300" : "text-emerald-300";
+
                           return (
-                            <td key={`${t.teamId}-${y}`} className={`py-2 pr-3 ${cls}`}>
-                              {v > 0 ? "+" : ""}
-                              {formatMoney(v)}
+                            <td key={`${t.teamId}-${y}`} className="py-2 pr-3 whitespace-nowrap">
+                              <div className={impactCls}>
+                                Impact: {impact > 0 ? "+" : ""}
+                                {formatMoney(impact)}m
+                              </div>
+
+                              <div className="text-slate-400 text-xs">
+                                Payroll: {formatMoney(newPayroll)}m
+                              </div>
+
+                              <div className={`text-xs font-semibold ${capCls}`}>
+                                Cap Space: {capSpaceAfter >= 0 ? "+" : ""}
+                                {formatMoney(capSpaceAfter)}m
+                              </div>
                             </td>
                           );
                         })}

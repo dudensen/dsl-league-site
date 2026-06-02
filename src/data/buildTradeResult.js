@@ -2,12 +2,12 @@
 function norm(x) { return String(x ?? "").trim().toLowerCase(); }
 
 export function buildTradeResult({
-  trade,                  // [{ teamId, receives: ["Player A", "Player B"] }, ...]
+  trade,
   players,
   years,
-  cap = 200_000_000,
-  teamPayrollByYear,      // from computeTeamPayrollByYear
-  efficiencyYear = "2026" // salary year used for FP/$ and FP/G/$ checks if you need recompute
+  cap = 200,
+  teamPayrollByYear,
+  efficiencyYear = "2026"
 }) {
   const playerByName = new Map(players.map(p => [norm(p.name), p]));
 
@@ -34,7 +34,20 @@ export function buildTradeResult({
       teamId,
       incoming: [],
       outgoing: [],
-      capByYear: Object.fromEntries(years.map(y => [y, { incoming: 0, outgoing: 0, net: 0, newPayroll: null, overCap: null }])),
+      capByYear: Object.fromEntries(
+  years.map(y => [
+    y,
+    {
+      incoming: 0,
+      outgoing: 0,
+      net: 0,
+      oldPayroll: null,
+      newPayroll: null,
+      availableCap: null,
+      overCap: null
+    }
+  ])
+),
       fp: {
         incoming: { fpG: 0, fp$: 0, fpG$: 0 },
         outgoing: { fpG: 0, fp$: 0, fpG$: 0 },
@@ -64,9 +77,15 @@ export function buildTradeResult({
       cell.net = net;
 
       if (teamPayrollByYear?.[teamId]?.[y] != null) {
-        cell.newPayroll = teamPayrollByYear[teamId][y] + net;
-        cell.overCap = cell.newPayroll > cap;
-      }
+  const oldPayroll = teamPayrollByYear[teamId][y];
+  const newPayroll = oldPayroll + net;
+  const availableCap = cap - newPayroll;
+
+  cell.oldPayroll = oldPayroll;
+  cell.newPayroll = newPayroll;
+  cell.availableCap = availableCap;
+  cell.overCap = availableCap < 0;
+}
     }
   }
 
