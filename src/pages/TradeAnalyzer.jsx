@@ -4,6 +4,8 @@ import { useLeague } from "../context/LeagueContext";
 import { fetchTeamSheet } from "../utils/fetchTeamSheet";
 import { TEAM_SHEETS } from "../config/teamSheets";
 import { buildTeamSalarySummary, parseWaiversFromTeamSheetRows } from "../data/teamSalarySummary";
+import html2canvas from "html2canvas";
+
 
 /* ----------------------------- utils ----------------------------- */
 
@@ -366,11 +368,144 @@ function DarkDropdown({ value, options, placeholder = "Select team...", onChange
 
 /* ----------------------------- Page ----------------------------- */
 
+function cleanCell(v) {
+  return String(v ?? "").replace("\r", "").trim();
+}
+
+function isMarkedPick(v) {
+  const t = cleanCell(v).toLowerCase();
+  return t === "x" || t === "✓" || t === "1" || t === "yes" || t === "y" || t === "true";
+}
+
+function parsePickYear(cell) {
+  const t = cleanCell(cell);
+  const m = t.match(/\b(20\d{2})\b/);
+  return m ? Number(m[1]) : null;
+}
+
+function parsePickName(raw) {
+  const t = cleanCell(raw);
+  const m = t.match(/\s*-\s*([A-Za-z])\s*$/);
+  const round = m ? m[1].toUpperCase() : null;
+  const team = m ? t.replace(/\s*-\s*[A-Za-z]\s*$/, "").trim() : t.trim();
+  return { team, round };
+}
+
+function parsePicksFromTeamSheetRows(rows, years) {
+  const out = {};
+  years.forEach(y => {
+    out[String(y)] = { A: [], B: [] };
+  });
+
+  const picksRowIndex = rows.findIndex(r =>
+    r.some(cell => typeof cell === "string" && cell.trim().toLowerCase() === "picks")
+  );
+
+  if (picksRowIndex === -1) return out;
+
+  const picksColIndex = (rows[picksRowIndex] || []).findIndex(
+    cell => typeof cell === "string" && cell.trim().toLowerCase() === "picks"
+  );
+
+  const pickNameCol = picksColIndex >= 0 ? picksColIndex : 1;
+
+  let yearColumnMap = {};
+
+  const candidateHeaderRows = [
+    picksRowIndex - 2,
+    picksRowIndex - 1,
+    picksRowIndex,
+    picksRowIndex + 1,
+    picksRowIndex + 2,
+    picksRowIndex + 3,
+  ].filter(i => i >= 0 && i < rows.length);
+
+  for (const idx of candidateHeaderRows) {
+    const row = rows[idx] || [];
+
+    row.forEach((cell, colIndex) => {
+      const y = parsePickYear(cell);
+      if (y && years.map(String).includes(String(y))) {
+        yearColumnMap[colIndex] = String(y);
+      }
+    });
+
+    if (Object.keys(yearColumnMap).length > 0) break;
+  }
+
+  if (Object.keys(yearColumnMap).length === 0) {
+    const counts = {};
+    const start = picksRowIndex + 1;
+    const end = Math.min(rows.length, start + 50);
+
+    for (let r = start; r < end; r++) {
+      const row = rows[r] || [];
+      row.forEach((cell, colIndex) => {
+        if (isMarkedPick(cell)) {
+          counts[colIndex] = (counts[colIndex] || 0) + 1;
+        }
+      });
+    }
+
+    const topCols = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, years.length)
+      .map(([col]) => Number(col))
+      .sort((a, b) => a - b);
+
+    topCols.forEach((col, i) => {
+      yearColumnMap[col] = String(years[i]);
+    });
+  }
+
+  const grouped = {};
+  years.forEach(y => {
+    grouped[String(y)] = { A: new Set(), B: new Set() };
+  });
+
+  for (let r = picksRowIndex + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const pickStr = cleanCell(row[pickNameCol]);
+
+    if (!pickStr) continue;
+    if (pickStr.toLowerCase() === "picks") continue;
+
+    const { team, round } = parsePickName(pickStr);
+
+    Object.entries(yearColumnMap).forEach(([colIndexStr, year]) => {
+      const colIndex = Number(colIndexStr);
+
+      if (isMarkedPick(row[colIndex])) {
+        if (round === "A" || round === "B") {
+          grouped[String(year)]?.[round]?.add(team);
+        }
+      }
+    });
+  }
+
+  years.forEach(y => {
+    const yearKey = String(y);
+    out[yearKey] = {
+      A: Array.from(grouped[yearKey]?.A || []),
+      B: Array.from(grouped[yearKey]?.B || []),
+    };
+  });
+
+  return out;
+}
+
+function draftEstimateLabel(count) {
+  const n = Number(count || 0);
+  if (!n) return "$0m";
+  return `$${n * 3}m–$${n * 18}m`;
+}
+
 export default function TradeAnalyzerPage() {
   const { table, loading, error } = useLeague();
   const CAP = 200;
 
   const [loadError, setLoadError] = useState("");
+  const resultsRef = useRef(null);
 
   const [currentSeason, setCurrentSeason] = useState(null);
 
@@ -385,6 +520,7 @@ export default function TradeAnalyzerPage() {
 
   const [result, setResult] = useState(null);
   const [waiverByTeamYear, setWaiverByTeamYear] = useState({});
+  const [picksByTeamYear, setPicksByTeamYear] = useState({});
 
 
   useEffect(() => {
@@ -442,16 +578,31 @@ export default function TradeAnalyzerPage() {
           const cfg = TEAM_SHEETS[team];
           const rows = await fetchTeamSheet(cfg.gid);
           const waivers = parseWaiversFromTeamSheetRows(rows, yearsForWaivers);
-          return [team, waivers];
+          const picks = parsePicksFromTeamSheetRows(rows, yearsForWaivers);
+
+          return [team, { waivers, picks }];
         })
       );
 
       if (!alive) return;
 
-      setWaiverByTeamYear(prev => ({
-        ...prev,
-        ...Object.fromEntries(entries),
-      }));
+      const waiverEntries = {};
+const pickEntries = {};
+
+for (const [team, data] of entries) {
+  waiverEntries[team] = data.waivers;
+  pickEntries[team] = data.picks;
+}
+
+setWaiverByTeamYear(prev => ({
+  ...prev,
+  ...waiverEntries,
+}));
+
+setPicksByTeamYear(prev => ({
+  ...prev,
+  ...pickEntries,
+}));
     } catch {
       // keep silent, like TeamDetail
     }
@@ -539,6 +690,28 @@ export default function TradeAnalyzerPage() {
     setActiveTeam((t) => (t === teamId ? "" : t));
   }
 
+const draftEstimateByTeamYear = useMemo(() => {
+  const out = {};
+
+  for (const team of selectedTeams) {
+    out[team] = {};
+
+    for (const year of yearsSelected) {
+      const yearKey = String(year);
+      const count = picksByTeamYear?.[team]?.[yearKey]?.A?.length || 0;
+
+      out[team][yearKey] = {
+        count,
+        min: count * 3,
+        max: count * 18,
+        label: draftEstimateLabel(count),
+      };
+    }
+  }
+
+  return out;
+}, [selectedTeams, yearsSelected, picksByTeamYear]);
+
   const teamSalarySummaryByTeam = useMemo(() => {
   const out = {};
 
@@ -555,6 +728,24 @@ export default function TradeAnalyzerPage() {
 
   return out;
 }, [players, selectedTeams, yearsSelected, waiverByTeamYear, CAP]);
+
+
+async function exportTradeImage() {
+  if (!resultsRef.current) return;
+
+  const canvas = await html2canvas(resultsRef.current, {
+    backgroundColor: "#020617",
+    scale: 2,
+    useCORS: true,
+  });
+
+  const dataUrl = canvas.toDataURL("image/png");
+
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = `trade-analysis-${new Date().toISOString().slice(0, 10)}.png`;
+  link.click();
+}
 
   function runAnalysis() {
     const out = buildTradeResult({
@@ -840,8 +1031,23 @@ export default function TradeAnalyzerPage() {
       </div>
 
       {/* Results */}
-      <div className="rounded-2xl border border-slate-800/70 bg-slate-950/25 p-5 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
-        <div className="font-semibold">Results</div>
+      <div
+  ref={resultsRef}
+  className="rounded-2xl border border-slate-800/70 bg-slate-950/25 p-5 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]"
+>
+  <div className="flex items-center justify-between gap-3">
+    <div className="font-semibold">Results</div>
+
+    {result && (
+      <button
+        type="button"
+        onClick={exportTradeImage}
+        className="px-3 py-1.5 rounded-xl border border-slate-700/70 bg-slate-900/60 text-xs font-semibold text-slate-100 hover:border-orange-400 hover:text-orange-300"
+      >
+        Export PNG
+      </button>
+    )}
+  </div>
 
         {!result ? (
           <div className="mt-3 text-sm text-slate-400">Click “ANALYZE TRADE” to generate results.</div>
@@ -894,7 +1100,7 @@ export default function TradeAnalyzerPage() {
             <div className="rounded-2xl border border-slate-800/70 bg-slate-950/20 p-4">
               <div className="font-semibold">Salary Impact</div>
               <div className="text-xs text-slate-400 mt-1">
-                Per team, per year: trade salary impact, payroll after trade, and available cap space after trade.
+                Per team, per year: trade salary impact, payroll after trade, rookie estimate from owned Round A picks, and available cap space after trade.
               </div>
 
               <div className="mt-3 overflow-x-auto">
@@ -937,13 +1143,19 @@ export default function TradeAnalyzerPage() {
                               </div>
 
                               <div className="text-slate-400 text-xs">
-                                Payroll: {formatMoney(newPayroll)}m
-                              </div>
+                              Payroll: {formatMoney(newPayroll)}m
+                            </div>
 
-                              <div className={`text-xs font-semibold ${capCls}`}>
-                                Cap Space: {capSpaceAfter >= 0 ? "+" : ""}
-                                {formatMoney(capSpaceAfter)}m
-                              </div>
+                            
+
+                            <div className={`text-xs font-semibold ${capCls}`}>
+                              Cap Space: {capSpaceAfter >= 0 ? "+" : ""}
+                              {formatMoney(capSpaceAfter)}m
+                            </div>
+                              <div className="text-sky-300 text-xs">
+                              +Rookie Est.: {draftEstimateByTeamYear?.[t.teamId]?.[String(y)]?.label ?? "$0m"}
+                            </div>
+
                             </td>
                           );
                         })}

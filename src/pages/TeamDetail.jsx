@@ -8,6 +8,8 @@ import { fetchHistoryTable } from "../utils/fetchHistory"
 import { fetchTransactionsRows } from "../utils/fetchTransactions"
 import { fetchPlayerOptions, getOptionForPlayerYear, optionLabel } from "../utils/fetchPlayerOptions"
 import { fetchOverviewMapping } from "../utils/fetchOverview"
+import { buildTeamSalarySummary } from "../data/teamSalarySummary";
+
 
 /* ----------------------------- helpers (History summary) ----------------------------- */
 
@@ -328,13 +330,15 @@ export default function TeamDetail() {
   const [dataSortConfig, setDataSortConfig] = useState({ key: "Rank", direction: "asc" })
 
   const [gmName, setGmName] = useState("")
-  const [waiverByYear, setWaiverByYear] = useState({})
-  const [picksByYear, setPicksByYear] = useState({})
-  const [historySummary, setHistorySummary] = useState(null)
+const [waiverByYear, setWaiverByYear] = useState({})
+const [picksByYear, setPicksByYear] = useState({})
+const [historySummary, setHistorySummary] = useState(null)
 
-  const [txRows, setTxRows] = useState([])
-  const [txLoading, setTxLoading] = useState(true)
-  const [txError, setTxError] = useState(null)
+
+const [txRows, setTxRows] = useState([])
+const [txLoading, setTxLoading] = useState(true)
+const [txError, setTxError] = useState(null)
+
 
   const TX_TYPES = ["Trade", "Waiver", "Buy-out"]
   const [txFilter, setTxFilter] = useState("Trade")
@@ -350,6 +354,8 @@ export default function TeamDetail() {
 
   // ✅ memos BEFORE early returns
   const teamKey = useMemo(() => normTeam(decodedTeam), [decodedTeam])
+
+
 
   const teamPlayers = useMemo(() => {
     return (data || []).filter(row => row?.["Current Owner"] === decodedTeam)
@@ -394,36 +400,32 @@ export default function TeamDetail() {
     return (contractsByPos.G?.roster || 0) + (contractsByPos.F?.roster || 0) + (contractsByPos.C?.roster || 0)
   }, [contractsByPos])
 
-  const salarySummary = useMemo(() => {
-    const out = {}
-    for (const year of years) {
-      let roster = 0
-      let minors = 0
+  const draftEstimateByYear = useMemo(() => {
+  const out = {}
 
-      for (const player of teamPlayers) {
-        const raw = player?.[String(year)] || ""
-        if (!raw) continue
+  for (const year of years) {
+    const yearKey = String(year)
+    const count = picksByYear?.[year]?.A?.length || 0
 
-        const cleaned = String(raw).replace("$", "").replace("m", "").trim()
-        const salary = parseFloat(cleaned)
-        if (isNaN(salary)) continue
-
-        const excluded = isExcludedType(player?.["Rookie / Minor / Captain"])
-        if (excluded) minors += salary
-        else roster += salary
-      }
-
-      const waiver = waiverByYear[year] || 0
-
-      out[year] = {
-        roster: roster + waiver,
-        minors,
-        waiver,
-        capSpace: CAP - (roster + waiver)
-      }
+    out[yearKey] = {
+      count,
+      min: count * 3,
+      max: count * 18,
+      label: count > 0 ? `$${count * 3}m–$${count * 18}m` : "$0m",
     }
-    return out
-  }, [teamPlayers, waiverByYear, years])
+  }
+
+  return out
+}, [picksByYear, years])
+
+const salarySummary = useMemo(() => {
+  return buildTeamSalarySummary({
+    teamPlayers,
+    years,
+    waiverByYear,
+    cap: CAP,
+  })
+}, [teamPlayers, years, waiverByYear, CAP])
 
   const groupedPlayers = useMemo(() => {
     const out = {}
@@ -538,6 +540,7 @@ export default function TeamDetail() {
     return () => ac.abort()
   }, [])
 
+  
 
   useEffect(() => {
   let alive = true
@@ -947,29 +950,40 @@ export default function TeamDetail() {
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="bg-slate-700 text-orange-400">
-                  <th className="p-2 text-left">Year</th>
-                  <th className="p-2 text-right">
-                    Roster <br /> (incl Waivers)
-                  </th>
-                  <th className="p-2 text-right">Minors</th>
-                  <th className="p-2 text-right">Waiver</th>
-                  <th className="p-2 text-right">Cap Space</th>
-                </tr>
-              </thead>
+              <tr className="bg-slate-700 text-orange-400">
+                <th className="p-2 text-left">Year</th>
+                <th className="p-2 text-right">
+                  Roster <br /> (incl Waivers)
+                </th>
+                <th className="p-2 text-right">Minors</th>
+                <th className="p-2 text-right">Waiver</th>
+                <th className="p-2 text-right">Draft Est.</th>
+                <th className="p-2 text-right">Cap Space</th>
+              </tr>
+            </thead>
               <tbody>
                 {years.map(year => (
                   <tr key={year} className="border-b border-slate-700">
                     <td className="p-2 font-semibold">{year}</td>
-                    <td className="p-2 text-right">${salarySummary[year]?.roster ?? 0}m</td>
-                    <td className="p-2 text-right">${salarySummary[year]?.minors ?? 0}m</td>
-                    <td className="p-2 text-right text-yellow-400">${salarySummary[year]?.waiver ?? 0}m</td>
+
+                    <td className="p-2 text-right">${salarySummary[String(year)]?.roster ?? 0}m</td>
+
+                    <td className="p-2 text-right">${salarySummary[String(year)]?.minors ?? 0}m</td>
+
+                    <td className="p-2 text-right text-yellow-400">
+                      ${salarySummary[String(year)]?.waiver ?? 0}m
+                    </td>
+
+                    <td className="p-2 text-right text-sky-300">
+                      {draftEstimateByYear[String(year)]?.label ?? "$0m"}
+                    </td>
+
                     <td
                       className={`p-2 text-right ${
-                        (salarySummary[year]?.capSpace ?? 0) < 0 ? "text-red-400" : "text-green-400"
+                        (salarySummary[String(year)]?.capSpace ?? 0) < 0 ? "text-red-400" : "text-green-400"
                       }`}
                     >
-                      ${salarySummary[year]?.capSpace ?? 0}m
+                      ${salarySummary[String(year)]?.capSpace ?? 0}m
                     </td>
                   </tr>
                 ))}
@@ -995,7 +1009,18 @@ export default function TeamDetail() {
                 {years.map(year => (
                   <tr key={year} className="border-b border-slate-700 align-top">
                     <td className="p-2 font-semibold">{year}</td>
-                    <td className="p-2">{renderPickLines(picksByYear[year]?.A)}</td>
+                    <td className="p-2">
+  {renderPickLines(picksByYear[year]?.A)}
+
+  {picksByYear[year]?.A?.length ? (
+    <div className="mt-2 text-[11px] text-slate-400">
+      Estimated Round A salary:{" "}
+      <span className="font-semibold text-sky-300">
+        {draftEstimateByYear[String(year)]?.label ?? "$0m"}
+      </span>
+    </div>
+  ) : null}
+</td>
                     <td className="p-2">{renderPickLines(picksByYear[year]?.B)}</td>
                   </tr>
                 ))}
