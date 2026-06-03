@@ -3,9 +3,16 @@ import React, { useMemo, useRef, useState, useEffect } from "react";
 import { useLeague } from "../context/LeagueContext";
 import { fetchTeamSheet } from "../utils/fetchTeamSheet";
 import { TEAM_SHEETS } from "../config/teamSheets";
-import { buildTeamSalarySummary, parseWaiversFromTeamSheetRows } from "../data/teamSalarySummary";
+import {
+  buildTeamSalarySummary,
+  parseWaiversFromTeamSheetRows,
+  buildDraftOrderFromTeamSheetRows,
+  buildDraftEstimateByYear,
+} from "../data/teamSalarySummary";
 import html2canvas from "html2canvas";
 
+
+const DRAFT_ORDER_GID = "1853178216";
 
 /* ----------------------------- utils ----------------------------- */
 
@@ -391,6 +398,15 @@ function parsePickName(raw) {
   return { team, round };
 }
 
+
+
+function draftEstimateLabel(count) {
+  const n = Number(count || 0);
+  if (!n) return "$0m";
+  return `$${n * 3}m–$${n * 18}m`;
+}
+
+
 function parsePicksFromTeamSheetRows(rows, years) {
   const out = {};
   years.forEach(y => {
@@ -440,6 +456,7 @@ function parsePicksFromTeamSheetRows(rows, years) {
 
     for (let r = start; r < end; r++) {
       const row = rows[r] || [];
+
       row.forEach((cell, colIndex) => {
         if (isMarkedPick(cell)) {
           counts[colIndex] = (counts[colIndex] || 0) + 1;
@@ -485,6 +502,7 @@ function parsePicksFromTeamSheetRows(rows, years) {
 
   years.forEach(y => {
     const yearKey = String(y);
+
     out[yearKey] = {
       A: Array.from(grouped[yearKey]?.A || []),
       B: Array.from(grouped[yearKey]?.B || []),
@@ -492,12 +510,6 @@ function parsePicksFromTeamSheetRows(rows, years) {
   });
 
   return out;
-}
-
-function draftEstimateLabel(count) {
-  const n = Number(count || 0);
-  if (!n) return "$0m";
-  return `$${n * 3}m–$${n * 18}m`;
 }
 
 export default function TradeAnalyzerPage() {
@@ -521,6 +533,7 @@ export default function TradeAnalyzerPage() {
   const [result, setResult] = useState(null);
   const [waiverByTeamYear, setWaiverByTeamYear] = useState({});
   const [picksByTeamYear, setPicksByTeamYear] = useState({});
+  const [draftOrderByYear, setDraftOrderByYear] = useState({});
 
 
   useEffect(() => {
@@ -565,50 +578,63 @@ export default function TradeAnalyzerPage() {
   useEffect(() => {
   let alive = true;
 
-  async function loadWaiversForSelectedTeams() {
-    const yearsForWaivers = allSalaryYears.length ? allSalaryYears : yearsSelected;
+  async function loadTeamSheetExtrasForSelectedTeams() {
+    const yearsForSheets = allSalaryYears.length ? allSalaryYears : yearsSelected;
 
     const teamsToLoad = selectedTeams.filter(team => TEAM_SHEETS[team]);
 
     if (!teamsToLoad.length) return;
 
     try {
-      const entries = await Promise.all(
-        teamsToLoad.map(async team => {
-          const cfg = TEAM_SHEETS[team];
-          const rows = await fetchTeamSheet(cfg.gid);
-          const waivers = parseWaiversFromTeamSheetRows(rows, yearsForWaivers);
-          const picks = parsePicksFromTeamSheetRows(rows, yearsForWaivers);
+      const [entries, draftRows] = await Promise.all([
+        Promise.all(
+          teamsToLoad.map(async team => {
+            const cfg = TEAM_SHEETS[team];
+            const rows = await fetchTeamSheet(cfg.gid);
 
-          return [team, { waivers, picks }];
-        })
-      );
+            const waivers = parseWaiversFromTeamSheetRows(rows, yearsForSheets);
+            const picks = parsePicksFromTeamSheetRows(rows, yearsForSheets);
+
+            return [team, { waivers, picks }];
+          })
+        ),
+        fetchTeamSheet(DRAFT_ORDER_GID),
+      ]);
 
       if (!alive) return;
 
       const waiverEntries = {};
-const pickEntries = {};
+      const pickEntries = {};
 
-for (const [team, data] of entries) {
-  waiverEntries[team] = data.waivers;
-  pickEntries[team] = data.picks;
-}
+      for (const [team, data] of entries) {
+        waiverEntries[team] = data.waivers;
+        pickEntries[team] = data.picks;
+      }
 
-setWaiverByTeamYear(prev => ({
-  ...prev,
-  ...waiverEntries,
-}));
+      setWaiverByTeamYear(prev => ({
+        ...prev,
+        ...waiverEntries,
+      }));
 
-setPicksByTeamYear(prev => ({
-  ...prev,
-  ...pickEntries,
-}));
-    } catch {
-      // keep silent, like TeamDetail
+      setPicksByTeamYear(prev => ({
+        ...prev,
+        ...pickEntries,
+      }));
+
+      const draftOrderMap = buildDraftOrderFromTeamSheetRows(draftRows);
+
+      const currentYear = new Date().getFullYear();
+
+      setDraftOrderByYear(prev => ({
+        ...prev,
+        [String(currentYear)]: draftOrderMap,
+      }));
+    } catch (e) {
+      console.error("TradeAnalyzer team-sheet extras failed", e);
     }
   }
 
-  loadWaiversForSelectedTeams();
+  loadTeamSheetExtrasForSelectedTeams();
 
   return () => {
     alive = false;
@@ -690,27 +716,22 @@ setPicksByTeamYear(prev => ({
     setActiveTeam((t) => (t === teamId ? "" : t));
   }
 
+
 const draftEstimateByTeamYear = useMemo(() => {
   const out = {};
 
   for (const team of selectedTeams) {
-    out[team] = {};
-
-    for (const year of yearsSelected) {
-      const yearKey = String(year);
-      const count = picksByTeamYear?.[team]?.[yearKey]?.A?.length || 0;
-
-      out[team][yearKey] = {
-        count,
-        min: count * 3,
-        max: count * 18,
-        label: draftEstimateLabel(count),
-      };
-    }
+    out[team] = buildDraftEstimateByYear({
+      picksByYear: picksByTeamYear?.[team] || {},
+      draftOrderByYear,
+      years: yearsSelected,
+    });
   }
 
   return out;
-}, [selectedTeams, yearsSelected, picksByTeamYear]);
+}, [selectedTeams, picksByTeamYear, draftOrderByYear, yearsSelected]);
+
+
 
   const teamSalarySummaryByTeam = useMemo(() => {
   const out = {};
@@ -1143,18 +1164,20 @@ async function exportTradeImage() {
                               </div>
 
                               <div className="text-slate-400 text-xs">
-                              Payroll: {formatMoney(newPayroll)}m
-                            </div>
+                                Payroll: {formatMoney(newPayroll)}m
+                              </div>
 
-                            
+                             
 
-                            <div className={`text-xs font-semibold ${capCls}`}>
-                              Cap Space: {capSpaceAfter >= 0 ? "+" : ""}
-                              {formatMoney(capSpaceAfter)}m
-                            </div>
-                              <div className="text-sky-300 text-xs">
-                              +Rookie Est.: {draftEstimateByTeamYear?.[t.teamId]?.[String(y)]?.label ?? "$0m"}
-                            </div>
+                              <div className={`text-xs font-semibold ${capCls}`}>
+                                Cap Space: {capSpaceAfter >= 0 ? "+" : ""}
+                                {formatMoney(capSpaceAfter)}m
+                              </div>
+
+                               <div className="text-sky-300 text-xs">
+                                +Rookie Est.: {draftEstimateByTeamYear?.[t.teamId]?.[String(y)]?.label ?? "$0m"}
+                              </div>
+                              
 
                             </td>
                           );

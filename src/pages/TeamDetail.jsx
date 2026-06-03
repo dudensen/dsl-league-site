@@ -8,7 +8,13 @@ import { fetchHistoryTable } from "../utils/fetchHistory"
 import { fetchTransactionsRows } from "../utils/fetchTransactions"
 import { fetchPlayerOptions, getOptionForPlayerYear, optionLabel } from "../utils/fetchPlayerOptions"
 import { fetchOverviewMapping } from "../utils/fetchOverview"
-import { buildTeamSalarySummary } from "../data/teamSalarySummary";
+import {
+  buildTeamSalarySummary,
+  buildDraftOrderFromTeamSheetRows,
+  buildDraftEstimateByYear,
+} from "../data/teamSalarySummary"
+
+const DRAFT_ORDER_GID = "1853178216"
 
 
 /* ----------------------------- helpers (History summary) ----------------------------- */
@@ -332,6 +338,7 @@ export default function TeamDetail() {
   const [gmName, setGmName] = useState("")
 const [waiverByYear, setWaiverByYear] = useState({})
 const [picksByYear, setPicksByYear] = useState({})
+const [draftOrderByYear, setDraftOrderByYear] = useState({})
 const [historySummary, setHistorySummary] = useState(null)
 
 
@@ -401,22 +408,14 @@ const [txError, setTxError] = useState(null)
   }, [contractsByPos])
 
   const draftEstimateByYear = useMemo(() => {
-  const out = {}
+  return buildDraftEstimateByYear({
+    picksByYear,
+    draftOrderByYear,
+    years,
+  })
+}, [picksByYear, draftOrderByYear, years])
 
-  for (const year of years) {
-    const yearKey = String(year)
-    const count = picksByYear?.[year]?.A?.length || 0
 
-    out[yearKey] = {
-      count,
-      min: count * 3,
-      max: count * 18,
-      label: count > 0 ? `$${count * 3}m–$${count * 18}m` : "$0m",
-    }
-  }
-
-  return out
-}, [picksByYear, years])
 
 const salarySummary = useMemo(() => {
   return buildTeamSalarySummary({
@@ -582,7 +581,10 @@ const salarySummary = useMemo(() => {
       if (!teamConfig) return
 
       try {
-        const rows = await fetchTeamSheet(teamConfig.gid)
+        const [rows, draftRows] = await Promise.all([
+          fetchTeamSheet(teamConfig.gid),
+          fetchTeamSheet(DRAFT_ORDER_GID),
+        ])
         
 
 
@@ -704,6 +706,16 @@ const salarySummary = useMemo(() => {
         })
 
         setPicksByYear(finalPicks)
+
+
+
+const draftOrderMap = buildDraftOrderFromTeamSheetRows(draftRows)
+
+
+setDraftOrderByYear(prev => ({
+  ...prev,
+  [String(currentYear)]: draftOrderMap,
+}))
       } catch {
         // silent
       }
@@ -1014,10 +1026,10 @@ const salarySummary = useMemo(() => {
 
   {picksByYear[year]?.A?.length ? (
     <div className="mt-2 text-[11px] text-slate-400">
-      Estimated Round A salary:{" "}
-      <span className="font-semibold text-sky-300">
-        {draftEstimateByYear[String(year)]?.label ?? "$0m"}
-      </span>
+      Estimated rookie salary:{" "}
+    <span className="font-semibold text-sky-300">
+      {draftEstimateByYear[String(Number(year) + 1)]?.label ?? "$0m"}
+    </span>
     </div>
   ) : null}
 </td>
