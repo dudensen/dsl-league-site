@@ -132,35 +132,144 @@ function formatTenthsPercent(raw) {
   return `${(n / 10).toFixed(1).replace(".", ",")}%`
 }
 
+const isYear = v => /\b\d{4}\b/.test(String(v))
+
+function buildHistoryCategories(rawCatRow, baseCount) {
+  const raw = rawCatRow.map(s)
+  const out = new Array(raw.length).fill("")
+
+  // Keep direct non-year labels after base columns
+  for (let i = 0; i < raw.length; i++) {
+    if (i < baseCount) continue
+    if (raw[i] && !isYear(raw[i])) out[i] = raw[i]
+  }
+
+  // Year anchors: each year covers Record W%, Fpts/G Adjusted, Playoffs
+  // In your sheet the year header sits above the middle column, so span i-1, i, i+1
+  for (let i = 0; i < raw.length; i++) {
+    const v = raw[i]
+    if (!isYear(v)) continue
+
+    const left = i - 1
+    const mid = i
+    const right = i + 1
+
+    if (left >= baseCount) out[left] = v
+    if (mid >= baseCount) out[mid] = v
+    if (right < raw.length && right >= baseCount) out[right] = v
+  }
+
+  // Fill forward for normal section labels if needed
+  let lastNonYear = ""
+  for (let i = 0; i < out.length; i++) {
+    if (i < baseCount) continue
+    if (out[i] && !isYear(out[i])) lastNonYear = out[i]
+    if (!out[i] && lastNonYear) out[i] = lastNonYear
+  }
+
+  return out
+}
+
+function awardsFromHistoryRow(row, startIdx, endIdx) {
+  const countAwards = values => {
+    let champs = 0
+    let finals = 0
+
+    for (const raw of values) {
+      const v = norm(raw)
+
+      if (v === "champ" || v === "champion" || v === "champions") {
+        champs += 1
+      } else if (
+        v === "final" ||
+        v === "finals" ||
+        v === "conference final" ||
+        v === "conference finals"
+      ) {
+        finals += 1
+      }
+    }
+
+    return [
+      champs > 0 ? "🏆".repeat(champs) : "",
+      finals > 0 ? "⭐".repeat(finals) : ""
+    ].filter(Boolean).join(" ")
+  }
+
+  // First try the normal fixed-column scan.
+  const indexedValues = []
+  for (let i = startIdx; i < endIdx; i++) {
+    indexedValues.push(row[i])
+  }
+
+  const fromIndexed = countAwards(indexedValues)
+  if (fromIndexed) return fromIndexed
+
+  // Fallback for rows that Google Sheets exports with shifted / collapsed cells.
+  // Use only non-empty values, then remove the last 6 summary values:
+  // Total: Record W%, Fpts/G Adjusted, Playoffs Appearances
+  // Records: Best Record W%, Best Fpts/G Adjusted, Best Playoffs
+  const nonEmpty = (row || []).map(s).filter(Boolean)
+
+  // Drop base identity cells:
+  // active marker, division, conference, team
+  const afterIdentity = nonEmpty.slice(4)
+
+  // Drop Total + Records summary block from the far right.
+  const yearlyOnly = afterIdentity.length > 6
+    ? afterIdentity.slice(0, -6)
+    : afterIdentity
+
+  return countAwards(yearlyOnly)
+}
+
+
 function parseHistoryToSummaryMap(grid) {
   const rows = Array.isArray(grid) ? grid : []
   if (rows.length < 2) return {}
 
+  const catRowRaw = rows[0] || []
   const headerRowRaw = rows[1] || []
-  const colCount = headerRowRaw.length
+  const colCount = Math.max(catRowRaw.length, headerRowRaw.length)
+
   if (colCount < 8) return {}
 
-  const headerRow = new Array(colCount).fill("").map((_, i) => s(headerRowRaw[i]))
-  const baseCount = getBaseCount(headerRow)
+  const rawCatRow = new Array(colCount).fill("").map((_, i) => s(catRowRaw[i]))
+const headerRow = new Array(colCount).fill("").map((_, i) => s(headerRowRaw[i]))
 
-  const uniqueHeaders = buildUniqueKeys(headerRow)
-  const cols = uniqueHeaders.map((key, idx) => ({
-    idx,
-    key,
-    header: headerRow[idx] || key
-  }))
+const baseCount = getBaseCount(headerRow)
+const categories = buildHistoryCategories(rawCatRow, baseCount)
+
+const uniqueHeaders = buildUniqueKeys(headerRow)
+const cols = uniqueHeaders.map((key, idx) => ({
+  idx,
+  key,
+  header: headerRow[idx] || key,
+  category: categories[idx] || ""
+}))
 
   const teamKey = findColKey(cols, "Team")
-  const awardsKey =
-    findColKey(cols, "Champs / Finals") ||
-    findColKey(cols, "Champs/Finals") ||
-    (baseCount >= 4 ? cols[baseCount - 1]?.key : null)
 
-  const recordsIdxs = [colCount - 3, colCount - 2, colCount - 1].filter(i => i >= baseCount)
-  const totalIdxs = [colCount - 6, colCount - 5, colCount - 4].filter(i => i >= baseCount)
+const recordsIdxs = [colCount - 3, colCount - 2, colCount - 1].filter(i => i >= baseCount)
+const totalIdxs = [colCount - 6, colCount - 5, colCount - 4].filter(i => i >= baseCount)
+const totalStartIdx = totalIdxs.length ? Math.min(...totalIdxs) : colCount
+const recordsStartIdx = recordsIdxs.length ? Math.min(...recordsIdxs) : colCount
+const summaryStartIdx = Math.min(totalStartIdx, recordsStartIdx)
 
-  const recordsKeys = recordsIdxs.map(i => cols[i]?.key).filter(Boolean)
-  const totalKeys = totalIdxs.map(i => cols[i]?.key).filter(Boolean)
+const teamColIdx = cols.find(c => norm(c.header) === "team")?.idx ?? 3
+
+// Start after Team, Champs/Finals icons, and Conference Titles visual columns.
+// This avoids visual/icon helper columns and begins at the yearly data area.
+const awardsScanStartIdx = teamColIdx + 1
+
+// Stop before Total / Records so Best Playoffs does not add an extra award.
+const awardsScanEndIdx = summaryStartIdx
+
+const specialIdxs = new Set([...recordsIdxs, ...totalIdxs])
+
+const recordsKeys = recordsIdxs.map(i => cols[i]?.key).filter(Boolean)
+const totalKeys = totalIdxs.map(i => cols[i]?.key).filter(Boolean)
+
 
   const byTeam = {}
 
@@ -178,23 +287,43 @@ function parseHistoryToSummaryMap(grid) {
     const team = teamKey ? s(obj[teamKey]) : ""
     if (!team) continue
 
-    const awards = awardsKey ? s(obj[awardsKey]) : ""
+const bestRecordRaw = recordsKeys[0] ? obj[recordsKeys[0]] : ""
+const bestFptsAdj = recordsKeys[1] ? s(obj[recordsKeys[1]]) : ""
+const bestPlayoffs = recordsKeys[2] ? s(obj[recordsKeys[2]]) : ""
 
-    const bestRecordRaw = recordsKeys[0] ? obj[recordsKeys[0]] : ""
-    const bestFptsAdj = recordsKeys[1] ? s(obj[recordsKeys[1]]) : ""
-    const bestPlayoffs = recordsKeys[2] ? s(obj[recordsKeys[2]]) : ""
+const awardsFromScan = awardsFromHistoryRow(row, awardsScanStartIdx, awardsScanEndIdx)
 
+const awardsFromBestPlayoffs = (() => {
+  const v = norm(bestPlayoffs)
+
+  if (v === "champ" || v === "champion" || v === "champions") {
+    return "🏆"
+  }
+
+  if (
+    v === "final" ||
+    v === "finals" ||
+    v === "conference final" ||
+    v === "conference finals"
+  ) {
+    return "⭐"
+  }
+
+  return ""
+})()
+
+const awards = awardsFromScan || awardsFromBestPlayoffs
     const totalRecordRaw = totalKeys[0] ? obj[totalKeys[0]] : ""
-    const totalFptsAdj = recordsKeys[1] ? s(obj[recordsKeys[1]]) : ""
+    const totalFptsAdj = totalKeys[1] ? s(obj[totalKeys[1]]) : ""
     const totalPlayoffsApps = totalKeys[2] ? s(obj[totalKeys[2]]) : ""
 
     byTeam[norm(team)] = {
       team,
-      awards: awards || "",
+      awards,
 
       bestRecordW: formatTenthsPercent(bestRecordRaw),
       bestFptsAdjusted: bestFptsAdj,
-      bestPlayoffs: bestPlayoffs,
+      bestPlayoffs,
 
       totalRecordW: formatTenthsPercent(totalRecordRaw),
       totalFptsAdjusted: totalFptsAdj,
