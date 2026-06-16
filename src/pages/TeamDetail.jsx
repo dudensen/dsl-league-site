@@ -12,6 +12,7 @@ import {
   buildTeamSalarySummary,
   buildDraftOrderFromTeamSheetRows,
   buildDraftEstimateByYear,
+  getRookieSalaryForPick,
 } from "../data/teamSalarySummary"
 
 const DRAFT_ORDER_GID = "1853178216"
@@ -60,6 +61,18 @@ function norm(x) {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim()
+}
+
+function parseExplicitPickNumber(raw) {
+  const t = s(raw)
+  const m = t.match(/^pick\s*#?\s*(\d{1,2})$/i)
+  if (!m) return null
+
+  const n = Number(m[1])
+  if (!Number.isFinite(n)) return null
+  if (n < 1 || n > 48) return null
+
+  return n
 }
 
 function normTeam(x) {
@@ -585,6 +598,66 @@ const years = useMemo(() => {
   })
 }, [picksByYear, draftOrderByYear, years])
 
+const explicitDraftEstimateByYear = useMemo(() => {
+  const out = {}
+
+  for (const draftYear of years) {
+    const roundA = picksByYear?.[draftYear]?.A || []
+
+    const explicitFirstRoundPickNumbers = roundA
+      .map(parseExplicitPickNumber)
+      .filter(n => n != null && n >= 1 && n <= 24)
+
+    const total = explicitFirstRoundPickNumbers.reduce((sum, pickNumber) => {
+      return sum + getRookieSalaryForPick(pickNumber)
+    }, 0)
+
+    const salaryYear = String(draftYear)
+
+    if (total > 0) {
+      out[salaryYear] = {
+        value: total,
+        label: `$${total}m`,
+        picks: explicitFirstRoundPickNumbers,
+      }
+    }
+  }
+
+  return out
+}, [picksByYear, years])
+
+const combinedDraftEstimateByYear = useMemo(() => {
+  const toValue = item => {
+    if (!item) return 0
+    if (Number.isFinite(Number(item.value))) return Number(item.value)
+
+    const n = Number(String(item.label || "").replace(/[^\d.-]/g, ""))
+    return Number.isFinite(n) ? n : 0
+  }
+
+  const out = { ...draftEstimateByYear }
+
+  const allYears = new Set([
+    ...Object.keys(draftEstimateByYear || {}),
+    ...Object.keys(explicitDraftEstimateByYear || {}),
+  ])
+
+  for (const y of allYears) {
+    const normalValue = toValue(draftEstimateByYear?.[y])
+    const explicitValue = toValue(explicitDraftEstimateByYear?.[y])
+    const total = normalValue + explicitValue
+
+    out[y] = {
+      value: total,
+      label: `$${total}m`,
+      normal: draftEstimateByYear?.[y],
+      explicit: explicitDraftEstimateByYear?.[y],
+    }
+  }
+
+  return out
+}, [draftEstimateByYear, explicitDraftEstimateByYear])
+
 
 
 const salarySummary = useMemo(() => {
@@ -847,12 +920,29 @@ const salarySummary = useMemo(() => {
         years.forEach(y => { grouped[y] = { A: new Set(), B: new Set() } })
 
         const parsePickName = raw => {
-          const t = cleanCell(raw)
-          const m = t.match(/\s*-\s*([A-Za-z])\s*$/)
-          const round = m ? m[1].toUpperCase() : null
-          const team = m ? t.replace(/\s*-\s*[A-Za-z]\s*$/, "").trim() : t.trim()
-          return { team, round }
-        }
+  const t = cleanCell(raw)
+
+  const explicitPickNumber = parseExplicitPickNumber(t)
+  if (explicitPickNumber != null) {
+    return {
+      team: `Pick ${explicitPickNumber}`,
+      round: explicitPickNumber <= 24 ? "A" : "B",
+      pickNumber: explicitPickNumber,
+      explicit: true,
+    }
+  }
+
+      const m = t.match(/\s*-\s*([A-Za-z])\s*$/)
+      const round = m ? m[1].toUpperCase() : null
+      const team = m ? t.replace(/\s*-\s*[A-Za-z]\s*$/, "").trim() : t.trim()
+
+      return {
+        team,
+        round,
+        pickNumber: null,
+        explicit: false,
+      }
+    }
 
         if (picksRowIndex !== -1 && Object.keys(yearColumnMap).length > 0) {
           for (let r = picksRowIndex + 1; r < rows.length; r++) {
@@ -866,7 +956,9 @@ const salarySummary = useMemo(() => {
             Object.entries(yearColumnMap).forEach(([colIndexStr, year]) => {
               const colIndex = Number(colIndexStr)
               if (isMarked(row[colIndex])) {
-                if (round === "A" || round === "B") grouped[year][round].add(team)
+                if (round === "A" || round === "B") {
+                  grouped[year][round].add(team)
+                }
               }
             })
           }
@@ -1159,7 +1251,7 @@ setDraftOrderByYear(prev => ({
                     </td>
 
                     <td className="p-2 text-right text-sky-300">
-                      {draftEstimateByYear[String(year)]?.label ?? "$0m"}
+                      {combinedDraftEstimateByYear[String(year)]?.label ?? "$0m"}
                     </td>
 
                     <td
@@ -1200,7 +1292,7 @@ setDraftOrderByYear(prev => ({
     <div className="mt-2 text-[11px] text-slate-400">
       Estimated rookie salary:{" "}
     <span className="font-semibold text-sky-300">
-      {draftEstimateByYear[String(Number(year) + 1)]?.label ?? "$0m"}
+      {combinedDraftEstimateByYear[String(year)]?.label ?? "$0m"}
     </span>
     </div>
   ) : null}
