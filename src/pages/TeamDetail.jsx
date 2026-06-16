@@ -452,7 +452,37 @@ function TypeBadgeSmall({ t }) {
     </span>
   )
 }
+
+function deduceCurrentSeasonFromHeaders(headers) {
+  let lastRankYear = null
+
+  for (const h of headers || []) {
+    const m = String(h).trim().match(/^(\d{4})\s+Rank$/i)
+    if (!m) continue
+
+    const y = Number(m[1])
+    if (Number.isFinite(y)) {
+      lastRankYear = lastRankYear == null ? y : Math.max(lastRankYear, y)
+    }
+  }
+
+  return lastRankYear == null ? null : lastRankYear + 1
+}
+
+function extractAvailableSalaryYears(headers) {
+  return Array.from(
+    new Set(
+      (headers || [])
+        .map(h => String(h).trim())
+        .filter(h => /^20\d{2}$/.test(h))
+        .map(Number)
+    )
+  ).sort((a, b) => a - b)
+}
+
 /* ----------------------------- component ----------------------------- */
+
+
 
 export default function TeamDetail() {
   const { table, loading, error } = useLeague()
@@ -484,8 +514,19 @@ const [txError, setTxError] = useState(null)
   const decodedTeam = decodeURIComponent(teamName)
 
   // ✅ derived constants (no hooks)
-  const currentYear = new Date().getFullYear()
-  const years = [currentYear, currentYear + 1, currentYear + 2, currentYear + 3]
+  const currentYear = deduceCurrentSeasonFromHeaders(headers)
+
+const years = useMemo(() => {
+  if (!currentYear) return []
+
+  const salaryYears = extractAvailableSalaryYears(headers)
+  const availableFutureYears = salaryYears.filter(y => y >= currentYear)
+
+  return availableFutureYears.length >= 4
+    ? availableFutureYears.slice(0, 4)
+    : [currentYear, currentYear + 1, currentYear + 2, currentYear + 3]
+  }, [headers, currentYear])
+
   const CAP = 200
 
   // ✅ memos BEFORE early returns
@@ -705,6 +746,8 @@ const salarySummary = useMemo(() => {
 
 
   useEffect(() => {
+    if (!currentYear || !years.length) return
+
     async function loadTeamSheet() {
       const teamConfig = TEAM_SHEETS[decodedTeam]
       if (!teamConfig) return
@@ -852,7 +895,7 @@ setDraftOrderByYear(prev => ({
 
     loadTeamSheet()
 
-  }, [decodedTeam]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [decodedTeam, currentYear, years])
   
 
   useEffect(() => {
