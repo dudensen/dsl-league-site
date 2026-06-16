@@ -8,6 +8,7 @@ import {
   parseWaiversFromTeamSheetRows,
   buildDraftOrderFromTeamSheetRows,
   buildDraftEstimateByYear,
+  getRookieSalaryForPick,
 } from "../data/teamSalarySummary";
 import html2canvas from "html2canvas";
 
@@ -390,12 +391,41 @@ function parsePickYear(cell) {
   return m ? Number(m[1]) : null;
 }
 
+function parseExplicitPickNumber(raw) {
+  const t = cleanCell(raw);
+  const m = t.match(/^pick\s*#?\s*(\d{1,2})$/i);
+  if (!m) return null;
+
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return null;
+  if (n < 1 || n > 48) return null;
+
+  return n;
+}
+
 function parsePickName(raw) {
   const t = cleanCell(raw);
+
+  const explicitPickNumber = parseExplicitPickNumber(t);
+  if (explicitPickNumber != null) {
+    return {
+      team: `Pick ${explicitPickNumber}`,
+      round: explicitPickNumber <= 24 ? "A" : "B",
+      pickNumber: explicitPickNumber,
+      explicit: true,
+    };
+  }
+
   const m = t.match(/\s*-\s*([A-Za-z])\s*$/);
   const round = m ? m[1].toUpperCase() : null;
   const team = m ? t.replace(/\s*-\s*[A-Za-z]\s*$/, "").trim() : t.trim();
-  return { team, round };
+
+  return {
+    team,
+    round,
+    pickNumber: null,
+    explicit: false,
+  };
 }
 
 
@@ -409,8 +439,22 @@ function draftEstimateLabel(count) {
 
 function parsePicksFromTeamSheetRows(rows, years) {
   const out = {};
+  const grouped = {};
+
   years.forEach(y => {
-    out[String(y)] = { A: [], B: [] };
+    const yearKey = String(y);
+
+    out[yearKey] = {
+      A: [],
+      B: [],
+      explicitFirstRoundPickNumbers: [],
+    };
+
+    grouped[yearKey] = {
+      A: new Set(),
+      B: new Set(),
+      explicitFirstRoundPickNumbers: new Set(),
+    };
   });
 
   const picksRowIndex = rows.findIndex(r =>
@@ -475,11 +519,6 @@ function parsePicksFromTeamSheetRows(rows, years) {
     });
   }
 
-  const grouped = {};
-  years.forEach(y => {
-    grouped[String(y)] = { A: new Set(), B: new Set() };
-  });
-
   for (let r = picksRowIndex + 1; r < rows.length; r++) {
     const row = rows[r] || [];
     const pickStr = cleanCell(row[pickNameCol]);
@@ -487,14 +526,19 @@ function parsePicksFromTeamSheetRows(rows, years) {
     if (!pickStr) continue;
     if (pickStr.toLowerCase() === "picks") continue;
 
-    const { team, round } = parsePickName(pickStr);
+    const { team, round, pickNumber } = parsePickName(pickStr);
 
     Object.entries(yearColumnMap).forEach(([colIndexStr, year]) => {
       const colIndex = Number(colIndexStr);
+      const yearKey = String(year);
 
       if (isMarkedPick(row[colIndex])) {
         if (round === "A" || round === "B") {
-          grouped[String(year)]?.[round]?.add(team);
+          grouped[yearKey]?.[round]?.add(team);
+        }
+
+        if (pickNumber != null && pickNumber >= 1 && pickNumber <= 24) {
+          grouped[yearKey]?.explicitFirstRoundPickNumbers?.add(pickNumber);
         }
       }
     });
@@ -506,11 +550,16 @@ function parsePicksFromTeamSheetRows(rows, years) {
     out[yearKey] = {
       A: Array.from(grouped[yearKey]?.A || []),
       B: Array.from(grouped[yearKey]?.B || []),
+      explicitFirstRoundPickNumbers: Array.from(
+        grouped[yearKey]?.explicitFirstRoundPickNumbers || []
+      ),
     };
   });
 
   return out;
 }
+
+
 
 export default function TradeAnalyzerPage() {
   const { table, loading, error } = useLeague();
@@ -623,11 +672,9 @@ export default function TradeAnalyzerPage() {
 
       const draftOrderMap = buildDraftOrderFromTeamSheetRows(draftRows);
 
-      const currentYear = new Date().getFullYear();
-
       setDraftOrderByYear(prev => ({
         ...prev,
-        [String(currentYear)]: draftOrderMap,
+        [String(currentSeason)]: draftOrderMap,
       }));
     } catch (e) {
       console.error("TradeAnalyzer team-sheet extras failed", e);
@@ -639,7 +686,7 @@ export default function TradeAnalyzerPage() {
   return () => {
     alive = false;
   };
-}, [selectedTeams, allSalaryYears, yearsSelected]);
+}, [selectedTeams, allSalaryYears, yearsSelected, currentSeason]);
 
   // IMPORTANT: now we keep owner label with each player option
   const availablePlayers = useMemo(() => {
@@ -721,11 +768,40 @@ const draftEstimateByTeamYear = useMemo(() => {
   const out = {};
 
   for (const team of selectedTeams) {
-    out[team] = buildDraftEstimateByYear({
+    const normalEstimate = buildDraftEstimateByYear({
       picksByYear: picksByTeamYear?.[team] || {},
       draftOrderByYear,
       years: yearsSelected,
     });
+
+    const combined = { ...normalEstimate };
+
+    for (const year of yearsSelected) {
+      const yearKey = String(year);
+
+      const explicitPickNumbers =
+        picksByTeamYear?.[team]?.[yearKey]?.explicitFirstRoundPickNumbers || [];
+
+      const explicitValue = explicitPickNumbers.reduce((sum, pickNumber) => {
+        return sum + getRookieSalaryForPick(pickNumber);
+      }, 0);
+
+      const normalRaw = normalEstimate?.[yearKey];
+      const normalValue = Number(
+        String(normalRaw?.label || "$0m").replace(/[^\d.-]/g, "")
+      ) || 0;
+
+      const total = normalValue + explicitValue;
+
+      combined[yearKey] = {
+        value: total,
+        label: total > 0 ? `$${total}m` : "$0m",
+        explicitPickNumbers,
+        normal: normalRaw,
+      };
+    }
+
+    out[team] = combined;
   }
 
   return out;
