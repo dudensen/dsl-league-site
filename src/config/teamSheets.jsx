@@ -81,7 +81,7 @@ export const TEAM_SHEETS = {
   },
   "Serious Penguins": {
     sheetName: "T22 Peng",
-    gid: "830471438"
+    gid: "919978526"
   },
   "Paphos Wizards": {
     sheetName: "T23 Paphos",
